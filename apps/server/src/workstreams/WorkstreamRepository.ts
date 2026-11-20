@@ -161,6 +161,7 @@ export class WorkstreamRepository extends Context.Service<
     readonly updateWorkstream: (workstream: Workstream) => Sql<void>;
     /** Deletes the workstream with its memberships and memory. */
     readonly deleteWorkstream: (id: WorkstreamId) => Sql<void>;
+    /** Memberships whose thread exists. A draft's row waits here until its first message. */
     readonly listThreads: Sql<ReadonlyArray<WorkstreamThreadRecord>>;
     readonly getThread: (threadId: ThreadId) => Sql<Option.Option<WorkstreamThreadRecord>>;
     /** Null removes the thread from its workstream. A move resets its pin and delivery marks. */
@@ -184,7 +185,7 @@ export class WorkstreamRepository extends Context.Service<
     }) => Sql<void>;
     readonly listEntries: (id: WorkstreamId) => Sql<ReadonlyArray<WorkstreamMemoryEntry>>;
     readonly getEntry: (id: WorkstreamMemoryEntryId) => Sql<Option.Option<WorkstreamMemoryEntry>>;
-    /** Applies the operations under one new revision and returns it. */
+    /** Applies the operations under one new revision and returns it, or 0 if the workstream is gone. */
     readonly applyMemoryOperations: (input: {
       readonly workstreamId: WorkstreamId;
       readonly operations: ReadonlyArray<WorkstreamMemoryOperation>;
@@ -335,9 +336,12 @@ const make = Effect.gen(function* () {
       yield* sql`DELETE FROM workstream_threads WHERE workstream_id = ${id}`;
       yield* sql`DELETE FROM workstreams WHERE workstream_id = ${id}`;
     }, sql.withTransaction),
-    listThreads: sql<ThreadRow>`SELECT * FROM workstream_threads`.pipe(
-      Effect.map((rows) => rows.map(toThread)),
-    ),
+    listThreads: sql<ThreadRow>`
+      SELECT memberships.*
+      FROM workstream_threads AS memberships
+      JOIN orchestration_v2_projection_threads AS threads USING (thread_id)
+      WHERE threads.deleted_at IS NULL
+    `.pipe(Effect.map((rows) => rows.map(toThread))),
     getThread: Effect.fn("WorkstreamRepository.getThread")(function* (threadId) {
       const rows = yield* sql<ThreadRow>`
         SELECT * FROM workstream_threads WHERE thread_id = ${threadId}
@@ -408,6 +412,8 @@ const make = Effect.gen(function* () {
       now,
     }) {
       const revision = yield* bumpRevision(workstreamId, now);
+      // Deleted while a merge was waiting on the model: nothing may be written under its id.
+      if (revision === 0) return 0;
       // The model answered against an older read; a user's edit or lock since then wins.
       const unchanged = (ifRevision: number | undefined) =>
         ifRevision === undefined ? sql`1 = 1` : sql`locked = 0 AND revision = ${ifRevision}`;

@@ -9,7 +9,9 @@ import {
 } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 export const THREAD = ThreadId.make("thread:one");
 export const OTHER_THREAD = ThreadId.make("thread:two");
@@ -80,4 +82,22 @@ export const layerCountingRandom = Layer.sync(SecureRandom.SecureRandom, () => {
     bytes[size - 2] = Math.floor(next / 256);
     return bytes;
   });
+});
+
+/** Gives the threads a row in the thread projection, as a thread with a first message has. */
+export const seedThreads = Effect.fn("test.seedThreads")(function* (
+  ...threadIds: ReadonlyArray<ThreadId>
+) {
+  const sql = yield* SqlClient.SqlClient;
+  for (const threadId of threadIds) {
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_threads (
+        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+        created_at, updated_at, payload_json
+      ) VALUES (
+        ${threadId}, 'project:test', 'Thread', 'codex', 'full-access', 'default',
+        '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '{}'
+      )
+    `;
+  }
 });

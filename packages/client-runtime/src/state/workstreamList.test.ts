@@ -10,6 +10,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyWorkstreamMutation,
   buildWorkstreamList,
+  wantedWorkstreamMemberPages,
+  workstreamMemberCounts,
   workstreamStalenessBucket,
   type WorkstreamSortMode,
 } from "./workstreamList.ts";
@@ -202,5 +204,73 @@ describe("applyWorkstreamMutation", () => {
     );
     expect(next.workstreams.map((entry) => entry.id)).toEqual(["ws-a", "ws-empty"]);
     expect(next.memberships.map((entry) => entry.threadId)).toEqual(["t1", "t7", "t-archived"]);
+  });
+});
+
+describe("workstream members among older settled threads", () => {
+  it("counts members that are not loaded and leaves out loaded ones the list hides", () => {
+    const counts = workstreamMemberCounts({
+      memberships,
+      // t6 has no shell yet; t-archived is loaded but not listed.
+      loadedThreadIds: new Set(["t1", "t2", "t3", "t4", "t5", "t7", "t-archived"]),
+      listedThreadIds: new Set(["t1", "t2", "t3", "t4", "t5", "t7"]),
+    });
+    expect(Object.fromEntries(counts.countByWorkstreamId)).toEqual({
+      "ws-a": 1,
+      "ws-b": 5,
+      "ws-gone": 1,
+    });
+    expect(Object.fromEntries(counts.missingByWorkstreamId)).toEqual({ "ws-b": 1 });
+    expect(counts.missing).toBe(1);
+  });
+
+  const pages = (status: "ready" | "pending" | "failed", frontier: string | null) => ({
+    older: {},
+    pages: { status, frontier },
+  });
+  const requested = new Map([
+    ["env-a", 1],
+    ["env-b", 2],
+  ]);
+  const want = (
+    environments: Parameters<typeof wantedWorkstreamMemberPages<string>>[0]["environments"],
+    missing: ReadonlyArray<readonly [string, number]>,
+  ) =>
+    wantedWorkstreamMemberPages({
+      requested,
+      environments,
+      missingByEnvironment: new Map(missing),
+    });
+
+  it("asks one more page only of environments that still miss a member", () => {
+    const environments = new Map([
+      ["env-a", pages("ready", "cursor")],
+      ["env-b", pages("ready", "cursor")],
+      ["env-c", pages("ready", "cursor")],
+    ]);
+    expect(
+      Object.fromEntries(
+        want(environments, [
+          ["env-a", 2],
+          ["env-c", 1],
+        ]),
+      ),
+    ).toEqual({
+      "env-a": 2,
+      "env-b": 2,
+      "env-c": 1,
+    });
+  });
+
+  it("keeps the request while nothing is missing, a read is in flight, or no page is left", () => {
+    expect(want(new Map([["env-a", pages("ready", "cursor")]]), [])).toBe(requested);
+    for (const environment of [
+      pages("pending", "cursor"),
+      pages("failed", "cursor"),
+      pages("ready", null),
+      { ...pages("ready", "cursor"), older: null },
+    ]) {
+      expect(want(new Map([["env-a", environment]]), [["env-a", 3]])).toBe(requested);
+    }
   });
 });

@@ -140,6 +140,8 @@ const SORT_ENABLED = { draggable: false, droppable: false } as const;
  */
 export function WorkstreamRow(props: {
   entry: WorkstreamEntry;
+  /** Listed threads plus members whose older settled shell is still being read. */
+  threadCount: number;
   collapsed: boolean;
   /** Set when more than one environment lists workstreams. */
   environmentLabel: string | null;
@@ -175,7 +177,7 @@ export function WorkstreamRow(props: {
     event.preventDefault();
     props.onContextMenu(entry, position, contextMenuSourceOf(event));
   };
-  const count = entry.threads.length;
+  const count = props.threadCount;
   return (
     <li
       ref={setNodeRef}

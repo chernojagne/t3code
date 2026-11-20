@@ -177,16 +177,32 @@ const make = Effect.gen(function* () {
           switch (event.type) {
             case "thread.created": {
               const { parentThreadId, sideChat } = event.payload.lineage;
-              return parentThreadId === null || sideChat === true
-                ? Effect.void
-                : workstreams
-                    .inheritWorkstream({ threadId: event.threadId, parentThreadId })
-                    .pipe(
-                      Effect.catch((cause) =>
-                        Effect.logWarning("Could not inherit a workstream", { cause }),
-                      ),
-                    );
+              // A draft placed in a workstream becomes listable with its first message.
+              const placed = workstreams.threadChanged({
+                threadId: event.threadId,
+                deleted: false,
+              });
+              return (
+                parentThreadId === null || sideChat === true
+                  ? placed
+                  : Effect.andThen(
+                      placed,
+                      workstreams.inheritWorkstream({ threadId: event.threadId, parentThreadId }),
+                    )
+              ).pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("Could not place a new thread in a workstream", { cause }),
+                ),
+              );
             }
+            case "thread.deleted":
+              return workstreams.threadChanged({ threadId: event.threadId, deleted: true }).pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("Could not remove a deleted thread from its workstream", {
+                    cause,
+                  }),
+                ),
+              );
             case "run.updated":
               return event.payload.status === "completed"
                 ? reactions.run(

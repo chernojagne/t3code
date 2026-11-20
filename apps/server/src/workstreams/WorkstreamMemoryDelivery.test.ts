@@ -35,7 +35,7 @@ it.effect("a new session inherits the memory, then hears only what others add", 
       text: "Keep v1 until March.",
     });
 
-    const turn = { threadId: THREAD, providerThreadId: "provider-thread:a" };
+    const turn = { threadId: THREAD, providerThreadId: "provider-thread:a", nativeThreadId: null };
     assert.strictEqual((yield* delivery.pending(turn)).text, "");
 
     yield* service.mutate({ type: "thread.assign", threadId: THREAD, workstreamId: workstreamId! });

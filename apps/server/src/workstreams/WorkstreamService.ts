@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -49,6 +50,11 @@ export class WorkstreamService extends Context.Service<
     readonly inheritWorkstream: (input: {
       readonly threadId: ThreadId;
       readonly parentThreadId: ThreadId;
+    }) => Effect.Effect<void, WorkstreamError>;
+    /** A thread was created or deleted: a deleted one leaves its workstream, memory stays. */
+    readonly threadChanged: (input: {
+      readonly threadId: ThreadId;
+      readonly deleted: boolean;
     }) => Effect.Effect<void, WorkstreamError>;
     readonly listEntries: (
       workstreamId: WorkstreamId,
@@ -91,6 +97,8 @@ const make = Effect.gen(function* () {
       Effect.mapError(failed("Could not allocate an id.")),
     );
   // Each signal re-sends the full state, so a slow subscriber needs only the newest one.
+  // Changes read a row and write it back whole, so two devices' edits must not interleave.
+  const writes = yield* Semaphore.make(1);
   const stateChanges = yield* PubSub.sliding<void>(1);
   const memoryChanges = yield* PubSub.sliding<void>(1);
   const stateChanged = PubSub.publish(stateChanges, undefined).pipe(Effect.asVoid);
@@ -251,6 +259,7 @@ const make = Effect.gen(function* () {
           }
         }
       }).pipe(
+        writes.withPermits(1),
         Effect.mapError((cause) =>
           cause._tag === "WorkstreamError"
             ? cause
@@ -376,6 +385,16 @@ const make = Effect.gen(function* () {
         yield* stateChanged;
       },
       Effect.mapError(failed("Could not place the session in its parent's workstream.")),
+    ),
+    threadChanged: Effect.fn("WorkstreamService.threadChanged")(
+      function* ({ threadId, deleted }) {
+        if (Option.isNone(yield* repository.getThread(threadId))) return;
+        if (deleted) {
+          yield* repository.assignThread({ threadId, workstreamId: null, now: yield* nowIso });
+        }
+        yield* stateChanged;
+      },
+      Effect.mapError(failed("Could not update the session's workstream.")),
     ),
     listEntries,
     applyMemoryOperations,

@@ -281,16 +281,36 @@ export interface MemoryDelivery {
  * What a session's next turn should be told. A provider thread that has not seen this
  * workstream's memory gets all of it; afterwards it gets only what other sessions changed since.
  */
+/**
+ * Names the provider conversation a turn runs in. A provider thread keeps its id when recovery
+ * replaces its native session, and the replacement has seen none of the memory.
+ */
+export function memoryConversationKey(input: {
+  readonly providerThreadId: string;
+  readonly nativeThreadId: string | null;
+}): string {
+  return `${input.providerThreadId}|${input.nativeThreadId ?? ""}`;
+}
+
+// A key recorded before the provider named its session ends in "|" and matches that session later.
+const isSameConversation = (delivered: string | null, current: string) =>
+  delivered !== null &&
+  (delivered === current || (delivered.endsWith("|") && current.startsWith(delivered)));
+
 export function selectMemoryDelivery(input: {
   readonly workstream: WorkstreamRecord;
   readonly membership: WorkstreamThreadRecord;
   readonly entries: ReadonlyArray<WorkstreamMemoryEntry>;
-  readonly providerThreadId: string;
+  /** From `memoryConversationKey`. */
+  readonly conversation: string;
 }): MemoryDelivery {
   const { workstream, membership, entries } = input;
   const revision = workstream.memoryRevision;
   if (!workstream.memory.enabled) return { text: "", revision };
-  const firstDelivery = membership.deliveredProviderThreadId !== input.providerThreadId;
+  const firstDelivery = !isSameConversation(
+    membership.deliveredProviderThreadId,
+    input.conversation,
+  );
   if (firstDelivery && entries.length === 0) return { text: "", revision };
   // A removal leaves no entry to mention, so the session is given the memory again in full.
   if (!firstDelivery && workstream.memoryRemovedRevision > membership.deliveredRevision) {

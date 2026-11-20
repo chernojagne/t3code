@@ -1972,6 +1972,7 @@ export const layer: Layer.Layer<
         : yield* workstreamMemory.value.pending({
             threadId: projection.thread.id,
             providerThreadId: runningProviderThread.id,
+            nativeThreadId: runningProviderThread.nativeThreadRef?.nativeId ?? null,
           });
       const startWithHandoffs = Effect.fn("ProviderTurnStartService.startWithHandoffs")(
         function* (turnInput: Parameters<typeof session.startTurn>[0], compact = false) {

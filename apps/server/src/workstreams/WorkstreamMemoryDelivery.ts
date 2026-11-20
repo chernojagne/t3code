@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
-import { selectMemoryDelivery } from "./WorkstreamMemory.ts";
+import { memoryConversationKey, selectMemoryDelivery } from "./WorkstreamMemory.ts";
 import * as WorkstreamRepository from "./WorkstreamRepository.ts";
 
 export interface PendingWorkstreamMemory {
@@ -24,6 +24,8 @@ export class WorkstreamMemoryDelivery extends Context.Service<
     readonly pending: (input: {
       readonly threadId: ThreadId;
       readonly providerThreadId: string;
+      /** The provider's own session id, once it has one. */
+      readonly nativeThreadId: string | null;
     }) => Effect.Effect<PendingWorkstreamMemory>;
   }
 >()("t3/workstreams/WorkstreamMemoryDelivery") {}
@@ -37,11 +39,12 @@ const make = Effect.gen(function* () {
         if (Option.isNone(membership)) return NOTHING;
         const workstream = yield* repository.getWorkstream(membership.value.workstreamId);
         if (Option.isNone(workstream)) return NOTHING;
+        const conversation = memoryConversationKey(input);
         const delivery = selectMemoryDelivery({
           workstream: workstream.value,
           membership: membership.value,
           entries: yield* repository.listEntries(workstream.value.id),
-          providerThreadId: input.providerThreadId,
+          conversation,
         });
         if (delivery.text === "") return NOTHING;
         return {
@@ -50,7 +53,7 @@ const make = Effect.gen(function* () {
             .setThreadDelivery({
               threadId: input.threadId,
               workstreamId: workstream.value.id,
-              providerThreadId: input.providerThreadId,
+              providerThreadId: conversation,
               revision: delivery.revision,
             })
             .pipe(

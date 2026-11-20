@@ -263,3 +263,67 @@ export function applyWorkstreamMutation(
       return state;
   }
 }
+
+/**
+ * How many threads each workstream holds, counting members whose shell is not loaded yet, so a
+ * row never reads empty while its older settled threads are still being read. `isListed` says
+ * whether a loaded thread shows in the list; archived ones do not count.
+ */
+export function workstreamMemberCounts(input: {
+  readonly memberships: ReadonlyArray<WorkstreamMembership>;
+  readonly loadedThreadIds: ReadonlySet<string>;
+  readonly listedThreadIds: ReadonlySet<string>;
+}): {
+  readonly countByWorkstreamId: ReadonlyMap<string, number>;
+  readonly missingByWorkstreamId: ReadonlyMap<string, number>;
+  readonly missing: number;
+} {
+  const countByWorkstreamId = new Map<string, number>();
+  const missingByWorkstreamId = new Map<string, number>();
+  let missing = 0;
+  for (const membership of input.memberships) {
+    const loaded = input.loadedThreadIds.has(membership.threadId);
+    if (loaded && !input.listedThreadIds.has(membership.threadId)) continue;
+    countByWorkstreamId.set(
+      membership.workstreamId,
+      (countByWorkstreamId.get(membership.workstreamId) ?? 0) + 1,
+    );
+    if (loaded) continue;
+    missing += 1;
+    missingByWorkstreamId.set(
+      membership.workstreamId,
+      (missingByWorkstreamId.get(membership.workstreamId) ?? 0) + 1,
+    );
+  }
+  return { countByWorkstreamId, missingByWorkstreamId, missing };
+}
+
+/**
+ * The older settled pages each environment should have read for its workstream members: one
+ * more while a member's shell is missing, once the pages already asked for have loaded. Pages
+ * are by position, so this grows until the members appear or the environment has no more. An
+ * environment with no member missing keeps what it has. Returns `requested` when nothing changes.
+ */
+export function wantedWorkstreamMemberPages<EnvironmentKey>(input: {
+  readonly requested: ReadonlyMap<EnvironmentKey, number>;
+  readonly environments: ReadonlyMap<
+    EnvironmentKey,
+    {
+      readonly older: unknown;
+      readonly pages: {
+        readonly status: "ready" | "pending" | "failed";
+        readonly frontier: unknown;
+      };
+    }
+  >;
+  readonly missingByEnvironment: ReadonlyMap<EnvironmentKey, number>;
+}): ReadonlyMap<EnvironmentKey, number> {
+  let next: Map<EnvironmentKey, number> | null = null;
+  for (const [environmentId, { older, pages }] of input.environments) {
+    if ((input.missingByEnvironment.get(environmentId) ?? 0) === 0) continue;
+    if (older === null || pages.status !== "ready" || pages.frontier === null) continue;
+    next ??= new Map(input.requested);
+    next.set(environmentId, (input.requested.get(environmentId) ?? 0) + 1);
+  }
+  return next ?? input.requested;
+}

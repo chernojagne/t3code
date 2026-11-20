@@ -22,6 +22,7 @@ import { resolveThreadActivityTimestamp } from "@t3tools/client-runtime/state/th
 import {
   buildWorkstreamEntries,
   sortWorkstreamEntries,
+  workstreamMemberCounts,
   type WorkstreamSortMode,
 } from "@t3tools/client-runtime/state/workstream-list";
 import type {
@@ -60,6 +61,7 @@ import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { useWorkstreamMemberPages } from "./useWorkstreamMemberPages";
 import { useWorkstreamMutation } from "./useWorkstreamMutation";
 import {
   useWorkstreamEditableEnvironmentIds,
@@ -177,6 +179,39 @@ export default function WorkstreamSidebar() {
 
   const threads = filterSidebarV2VisibleThreads(quietThreads, null, delegatedUnderParent);
   const stateByEnvironment = new Map(states.map((entry) => [entry.environmentId, entry]));
+  const memberCountsByEnvironment = new Map(
+    states.flatMap((entry) =>
+      entry.state === null
+        ? []
+        : [
+            [
+              entry.environmentId,
+              workstreamMemberCounts({
+                memberships: entry.state.memberships,
+                loadedThreadIds: new Set(
+                  quietThreads.flatMap((thread) =>
+                    thread.environmentId === entry.environmentId ? [thread.id] : [],
+                  ),
+                ),
+                listedThreadIds: new Set(
+                  threads.flatMap((thread) =>
+                    thread.environmentId === entry.environmentId ? [thread.id] : [],
+                  ),
+                ),
+              }),
+            ] as const,
+          ],
+    ),
+  );
+  const memberPages = useWorkstreamMemberPages({
+    environmentIds: states.map((entry) => entry.environmentId),
+    missingByEnvironment: new Map(
+      [...memberCountsByEnvironment].map(([environmentId, counts]) => [
+        environmentId,
+        counts.missing,
+      ]),
+    ),
+  });
   const models = states.flatMap((entry) =>
     entry.state === null
       ? []
@@ -564,10 +599,17 @@ export default function WorkstreamSidebar() {
                   const { environmentId, id } = entry.workstream;
                   const key = workstreamKey(environmentId, id);
                   const pinned = entry.threads.filter((member) => member.pinned);
+                  // Members with no shell yet count until their environment has no page left.
+                  const missing = memberPages.isExhausted(environmentId)
+                    ? 0
+                    : (memberCountsByEnvironment
+                        .get(environmentId)
+                        ?.missingByWorkstreamId.get(id) ?? 0);
                   return (
                     <WorkstreamRow
                       key={key}
                       entry={entry}
+                      threadCount={entry.threads.length + missing}
                       collapsed={collapsedKeys.keys.includes(key)}
                       environmentLabel={
                         showEnvironment ? (labelByEnvironment.get(environmentId) ?? null) : null
@@ -592,7 +634,22 @@ export default function WorkstreamSidebar() {
                       {entry.threads
                         .filter((member) => !member.pinned)
                         .map((member) => renderThread(member.thread, false))}
-                      {entry.threads.length === 0 ? (
+                      {missing > 0 ? (
+                        <li className="list-none">
+                          <button
+                            type="button"
+                            aria-disabled={!memberPages.failed}
+                            onClick={() => {
+                              if (memberPages.failed) memberPages.retry();
+                            }}
+                            className="flex h-8 w-full items-center rounded-(--control-radius) pr-2 pl-8 text-left text-xs text-sidebar-muted-foreground hover:bg-sidebar-row-hover aria-disabled:cursor-default aria-disabled:hover:bg-transparent"
+                          >
+                            {memberPages.failed
+                              ? gt("Could not load older threads. Retry")
+                              : gt("Loading")}
+                          </button>
+                        </li>
+                      ) : entry.threads.length === 0 ? (
                         <li className="list-none py-1.5 pr-2 pl-8 text-xs text-sidebar-muted-foreground">
                           <T>No threads yet. Drag one here or start a new one.</T>
                         </li>

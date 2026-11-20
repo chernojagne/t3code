@@ -1,5 +1,10 @@
 import { assert, it } from "@effect/vitest";
-import { ProjectId, type WorkstreamId, type WorkstreamState } from "@t3tools/contracts";
+import {
+  ProjectId,
+  type WorkstreamId,
+  WorkstreamMemoryEntryId,
+  type WorkstreamState,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,7 +14,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
-import { layerCountingRandom, OTHER_THREAD, THREAD } from "./testkit.ts";
+import { layerCountingRandom, OTHER_THREAD, seedThreads, THREAD } from "./testkit.ts";
 import * as WorkstreamService from "./WorkstreamService.ts";
 
 const layerSecrets = Layer.effect(
@@ -76,6 +81,9 @@ it.effect("moves a session between workstreams, clearing its pin, and back to un
     const first = yield* create("Checkout rewrite");
     const second = yield* create("Flaky deploys");
     yield* service.mutate({ type: "thread.assign", threadId: THREAD, workstreamId: first });
+    // A draft placed in a workstream is not listed until its thread exists.
+    assert.deepStrictEqual((yield* current).memberships, []);
+    yield* seedThreads(THREAD);
     yield* service.mutate({ type: "thread.pin", threadId: THREAD, pinned: true, orderKey: "V" });
     assert.strictEqual((yield* current).memberships[0]?.pinOrderKey, "V");
 
@@ -96,6 +104,7 @@ it.effect("deleting a workstream drops its memberships and memory but nothing el
     const service = yield* WorkstreamService.WorkstreamService;
     const doomed = yield* create("Checkout rewrite");
     const kept = yield* create("Flaky deploys");
+    yield* seedThreads(THREAD, OTHER_THREAD);
     yield* service.mutate({ type: "thread.assign", threadId: THREAD, workstreamId: doomed });
     yield* service.mutate({ type: "thread.assign", threadId: OTHER_THREAD, workstreamId: kept });
     yield* service.mutateMemory({
@@ -105,6 +114,20 @@ it.effect("deleting a workstream drops its memberships and memory but nothing el
       text: "Staging uses the eu-west cluster." as never,
     });
     yield* service.mutate({ type: "workstream.delete", workstreamId: doomed });
+    // A merge that was waiting on the model when the workstream went away writes nothing.
+    yield* service.applyMemoryOperations({
+      workstreamId: doomed,
+      operations: [
+        {
+          op: "add",
+          id: WorkstreamMemoryEntryId.make("memory:late"),
+          kind: "fact",
+          text: "Too late.",
+          sourceThreadId: THREAD,
+          locked: false,
+        },
+      ],
+    });
     const state = yield* current;
     assert.deepStrictEqual(
       state.workstreams.map((workstream) => workstream.id),
@@ -150,7 +173,8 @@ it.effect("memory survives after the session that wrote it leaves, and edits bum
       kind: "decision",
       text: "Keep v1 until March.",
     });
-    yield* service.mutate({ type: "thread.assign", threadId: THREAD, workstreamId: null });
+    yield* service.threadChanged({ threadId: THREAD, deleted: true });
+    assert.isTrue(Option.isNone(yield* service.workstreamOfThread(THREAD)));
     yield* service.mutateMemory({ type: "entry.update", entryId: saved.id, locked: true });
     const entries = yield* service.listEntries(workstreamId);
     assert.deepStrictEqual(

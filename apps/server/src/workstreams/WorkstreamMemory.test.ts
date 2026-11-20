@@ -147,7 +147,7 @@ describe("selectMemoryDelivery", () => {
       workstream: workstream(),
       membership: membership(),
       entries,
-      providerThreadId: "provider-thread:a",
+      conversation: "provider-thread:a|native-1",
     });
     assert.strictEqual(delivery.revision, 5);
     for (const entry of entries) assert.include(delivery.text, entry.text);
@@ -157,11 +157,11 @@ describe("selectMemoryDelivery", () => {
     const delivery = selectMemoryDelivery({
       workstream: workstream(),
       membership: membership({
-        deliveredProviderThreadId: "provider-thread:a",
+        deliveredProviderThreadId: "provider-thread:a|native-1",
         deliveredRevision: 4,
       }),
       entries,
-      providerThreadId: "provider-thread:a",
+      conversation: "provider-thread:a|native-1",
     });
     assert.include(delivery.text, "The flag ships dark until Monday.");
     assert.notInclude(delivery.text, "I renamed the flag.");
@@ -170,7 +170,7 @@ describe("selectMemoryDelivery", () => {
 
   it("replaces the session's copy after a removal, even when nothing is left", () => {
     const seen = membership({
-      deliveredProviderThreadId: "provider-thread:a",
+      deliveredProviderThreadId: "provider-thread:a|native-1",
       deliveredRevision: 5,
     });
     const removed = workstream({ memoryRevision: 6, memoryRemovedRevision: 6 });
@@ -178,7 +178,7 @@ describe("selectMemoryDelivery", () => {
       workstream: removed,
       membership: seen,
       entries: entries.slice(0, 1),
-      providerThreadId: "provider-thread:a",
+      conversation: "provider-thread:a|native-1",
     });
     assert.include(replaced.text, "replaces what you were given before");
     assert.include(replaced.text, "Staging uses the eu-west cluster.");
@@ -188,28 +188,44 @@ describe("selectMemoryDelivery", () => {
         workstream: removed,
         membership: seen,
         entries: [],
-        providerThreadId: "provider-thread:a",
+        conversation: "provider-thread:a|native-1",
       }).text,
       "(empty)",
     );
+  });
+
+  it("starts over when recovery gives the same provider thread a new native session", () => {
+    const delivered = (deliveredProviderThreadId: string, conversation: string) =>
+      selectMemoryDelivery({
+        workstream: workstream(),
+        membership: membership({ deliveredProviderThreadId, deliveredRevision: 5 }),
+        entries,
+        conversation,
+      }).text;
+    assert.include(
+      delivered("provider-thread:a|native-1", "provider-thread:a|native-2"),
+      "Staging uses the eu-west cluster.",
+    );
+    // The first turn is recorded before the provider names its session; that is the same one.
+    assert.strictEqual(delivered("provider-thread:a|", "provider-thread:a|native-1"), "");
   });
 
   it("starts over when the session moves to a new provider thread", () => {
     const delivery = selectMemoryDelivery({
       workstream: workstream(),
       membership: membership({
-        deliveredProviderThreadId: "provider-thread:a",
+        deliveredProviderThreadId: "provider-thread:a|native-1",
         deliveredRevision: 5,
       }),
       entries,
-      providerThreadId: "provider-thread:b",
+      conversation: "provider-thread:b|native-9",
     });
     assert.include(delivery.text, "Staging uses the eu-west cluster.");
   });
 
   it("gives nothing when it is up to date or memory is off", () => {
     const upToDate = membership({
-      deliveredProviderThreadId: "provider-thread:a",
+      deliveredProviderThreadId: "provider-thread:a|native-1",
       deliveredRevision: 5,
     });
     assert.strictEqual(
@@ -217,7 +233,7 @@ describe("selectMemoryDelivery", () => {
         workstream: workstream(),
         membership: upToDate,
         entries,
-        providerThreadId: "provider-thread:a",
+        conversation: "provider-thread:a|native-1",
       }).text,
       "",
     );
@@ -228,7 +244,7 @@ describe("selectMemoryDelivery", () => {
         }),
         membership: membership(),
         entries,
-        providerThreadId: "provider-thread:a",
+        conversation: "provider-thread:a|native-1",
       }).text,
       "",
     );
