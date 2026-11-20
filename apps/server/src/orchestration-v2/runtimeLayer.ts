@@ -46,6 +46,8 @@ import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
 import * as ProviderSwitchService from "./ProviderSwitchService.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
+import * as WorkstreamMemoryDelivery from "../workstreams/WorkstreamMemoryDelivery.ts";
+import * as WorkstreamRepository from "../workstreams/WorkstreamRepository.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import { layerThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
@@ -178,6 +180,7 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
       layerRunExecutionServiceProvided,
       layerRuntimePolicyProvided,
       TurnItemPositionStore.layer,
+      WorkstreamMemoryDelivery.layer.pipe(Layer.provide(WorkstreamRepository.layer)),
     ),
   ),
 );

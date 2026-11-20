@@ -395,6 +395,16 @@ import {
   TextGeneratorError,
 } from "./settings.ts";
 import {
+  WorkstreamError,
+  WorkstreamMemoryMutation,
+  WorkstreamMemoryState,
+  WorkstreamMemorySubscribeInput,
+  WorkstreamMutation,
+  WorkstreamMutationResult,
+  WorkstreamState,
+  WorkstreamSubscribeInput,
+} from "./workstream.ts";
+import {
   ScheduledTaskDeleteInput,
   ScheduledTaskDeleteResult,
   ScheduledTaskError,
@@ -577,6 +587,11 @@ export const WS_METHODS = {
   serverReportClientActivity: "server.reportClientActivity",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  workstreamsSubscribe: "workstreams.subscribe",
+  workstreamsMutate: "workstreams.mutate",
+  workstreamsSubscribeMemory: "workstreams.subscribeMemory",
+  workstreamsMutateMemory: "workstreams.mutateMemory",
 
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -2166,6 +2181,32 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsWorkstreamsSubscribeRpc = Rpc.make(WS_METHODS.workstreamsSubscribe, {
+  payload: WorkstreamSubscribeInput,
+  success: WorkstreamState,
+  error: Schema.Union([WorkstreamError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsWorkstreamsMutateRpc = Rpc.make(WS_METHODS.workstreamsMutate, {
+  payload: WorkstreamMutation,
+  success: WorkstreamMutationResult,
+  error: Schema.Union([WorkstreamError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkstreamsSubscribeMemoryRpc = Rpc.make(WS_METHODS.workstreamsSubscribeMemory, {
+  payload: WorkstreamMemorySubscribeInput,
+  success: WorkstreamMemoryState,
+  error: Schema.Union([WorkstreamError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsWorkstreamsMutateMemoryRpc = Rpc.make(WS_METHODS.workstreamsMutateMemory, {
+  payload: WorkstreamMemoryMutation,
+  success: Schema.Void,
+  error: Schema.Union([WorkstreamError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2330,6 +2371,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsWorkstreamsSubscribeRpc,
+  WsWorkstreamsMutateRpc,
+  WsWorkstreamsSubscribeMemoryRpc,
+  WsWorkstreamsMutateMemoryRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,

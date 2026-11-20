@@ -71,6 +71,7 @@ import {
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import * as WorkstreamMemoryDelivery from "../workstreams/WorkstreamMemoryDelivery.ts";
 import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
@@ -284,6 +285,10 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const restoreMissingWorktree = yield* makeRestoreMissingWorktree;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    // Optional so layers built without workstreams, such as most tests, still start turns.
+    const workstreamMemory = yield* Effect.serviceOption(
+      WorkstreamMemoryDelivery.WorkstreamMemoryDelivery,
+    );
 
     // Build draining callbacks outside startup scope so they cannot retain full thread history.
     const makeRunControls = (input: {
@@ -1962,6 +1967,12 @@ export const layer: Layer.Layer<
           ],
         });
       });
+      const pendingWorkstreamMemory = Option.isNone(workstreamMemory)
+        ? undefined
+        : yield* workstreamMemory.value.pending({
+            threadId: projection.thread.id,
+            providerThreadId: runningProviderThread.id,
+          });
       const startWithHandoffs = Effect.fn("ProviderTurnStartService.startWithHandoffs")(
         function* (turnInput: Parameters<typeof session.startTurn>[0], compact = false) {
           const delivery = yield* deliverContextHandoffs({
@@ -1988,7 +1999,12 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const context = [delivery.context, sideChatContext, restartNote]
+          // Like the side chat context, workstream memory waits for a turn that sends a prompt.
+          const workstreamContext =
+            pendingWorkstreamMemory === undefined || compact || goalCommand
+              ? ""
+              : pendingWorkstreamMemory.text;
+          const context = [workstreamContext, delivery.context, sideChatContext, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -2043,6 +2059,9 @@ export const layer: Layer.Layer<
           yield* Effect.forEach(
             [
               delivery.delivered,
+              ...(workstreamContext === "" || pendingWorkstreamMemory === undefined
+                ? []
+                : [pendingWorkstreamMemory.delivered]),
               ...(sideChatContext === "" || sideChatHandoff === undefined || nativeThreadId == null
                 ? []
                 : [
@@ -2083,6 +2102,7 @@ export const layer: Layer.Layer<
         retryHandoff.attachments.length === 0 &&
         sideChatHandoff === undefined &&
         restartNote === "" &&
+        (pendingWorkstreamMemory?.text ?? "") === "" &&
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);

@@ -68,6 +68,7 @@ import {
   PullRequestsToolkit,
 } from "../../apps/server/src/mcp/toolkits/pullRequests/tools.ts";
 import { ThemeToolkit } from "../../apps/server/src/mcp/toolkits/theme/tools.ts";
+import { WorkstreamToolkit } from "../../apps/server/src/mcp/toolkits/workstream/tools.ts";
 import { ThreadToolkit } from "../../apps/server/src/mcp/toolkits/thread/tools.ts";
 import { WorktreeToolkit } from "../../apps/server/src/mcp/toolkits/worktree/tools.ts";
 import {
@@ -467,6 +468,7 @@ const t3SourceTools: ReadonlyArray<Tool.Any> = [
   ProjectToolkit,
   EnvironmentToolkit,
   ThemeToolkit,
+  WorkstreamToolkit,
   PreviewControlsToolkit,
   WorktreeToolkit,
   PullRequestsToolkit,

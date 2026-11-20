@@ -13,6 +13,7 @@ import {
   BotIcon,
   createLucideIcon,
   CalendarClockIcon,
+  LayersIcon,
   FileDiffIcon,
   FolderTreeIcon,
   GitBranchIcon,
@@ -60,6 +61,7 @@ import {
   type SettingsSearchItem,
 } from "./settingsSearch";
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
+import { useWorkstreamsAvailable } from "../workstreams/workstreamData";
 import { handleSettingsSectionKeyDown } from "./settingsSectionNavigation";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
 
@@ -103,6 +105,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/browser": GlobeIcon,
   "/settings/devices": SmartphoneIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
+  "/settings/workstreams": LayersIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/worktrees": FolderTreeIcon,
   "/settings/connections": ServerIcon,
@@ -133,6 +136,7 @@ function SettingsSectionIcon({ to }: { to: SettingsPath }) {
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const gt = useGT();
   const m = useMessages();
+  const workstreamsAvailable = useWorkstreamsAvailable();
   const navArea = workspaceAreaProps("settings-nav", 0, gt("Settings sections"));
   const navigate = useNavigate();
   const currentHash = useLocation({ select: (location) => location.hash });
@@ -397,6 +401,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                       <div role="group" aria-labelledby={`settings-nav-group-${index}`}>
                         <SidebarMenu>
                           {group.paths.map((to) => {
+                            if (to === "/settings/workstreams" && !workstreamsAvailable)
+                              return null;
                             const Icon = SETTINGS_SECTION_ICONS[to];
                             const isActive = activePath === to || activePath.startsWith(`${to}/`);
                             return (

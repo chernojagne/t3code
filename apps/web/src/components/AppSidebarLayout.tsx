@@ -41,7 +41,7 @@ import {
 } from "../panelAnimations";
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
-import ThreadSidebar from "./Sidebar";
+import { SidebarViewSwitch } from "./workstreams/SidebarViewSwitch";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";
@@ -494,7 +494,7 @@ export function AppSidebarLayout({
               }}
               style={windowControlsInsetStyle}
             >
-              <ThreadSidebar routeReveal={sidebarRouteReveal} />
+              <SidebarViewSwitch routeReveal={sidebarRouteReveal} />
               <SidebarRail onDoubleClick={resetSidebarWidth} />
             </Sidebar>
           </>

@@ -159,6 +159,9 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as AuthHttp from "./auth/http.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as WorkstreamMemoryGate from "./workstreams/WorkstreamMemoryGate.ts";
+import * as WorkstreamMemoryReactor from "./workstreams/WorkstreamMemoryReactor.ts";
+import * as WorkstreamService from "./workstreams/WorkstreamService.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
@@ -688,6 +691,9 @@ const layerServerRestart = Layer.effect(
   }),
 );
 
+// One instance: its change signals reach every subscriber, the MCP tools and the memory reactor.
+const layerWorkstreams = WorkstreamService.layer.pipe(Layer.provide(ServerSecretStore.layer));
+
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
@@ -727,6 +733,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* service.start();
     }),
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* WorkstreamMemoryReactor.WorkstreamMemoryReactor;
+      yield* service.start();
+    }),
+  ).pipe(Layer.provide(WorkstreamMemoryReactor.layer), Layer.provide(WorkstreamMemoryGate.layer)),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
   ProviderInstallation.layer,
@@ -745,6 +757,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerGit),
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
+  Layer.provideMerge(layerWorkstreams),
   Layer.provideMerge(layerPersistence),
   Layer.provideMerge(Layer.mergeAll(Keybindings.layer, UsageLimitSources.layer)),
   Layer.provideMerge(ProviderRegistry.layer),

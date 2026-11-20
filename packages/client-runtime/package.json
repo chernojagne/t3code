@@ -367,6 +367,14 @@
       "types": "./src/state/issueTrackers.ts",
       "default": "./src/state/issueTrackers.ts"
     },
+    "./state/workstreams": {
+      "types": "./src/state/workstreams.ts",
+      "default": "./src/state/workstreams.ts"
+    },
+    "./state/workstream-list": {
+      "types": "./src/state/workstreamList.ts",
+      "default": "./src/state/workstreamList.ts"
+    },
     "./state/source-control": {
       "types": "./src/state/sourceControl.ts",
       "default": "./src/state/sourceControl.ts"
