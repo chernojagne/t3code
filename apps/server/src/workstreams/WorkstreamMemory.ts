@@ -238,7 +238,7 @@ export function planMemoryOperations(input: {
     if (entry === undefined || entry.locked || touched.has(entry.id)) continue;
     touched.add(entry.id);
     if (proposed.op === "delete") {
-      operations.push({ op: "delete", id: entry.id });
+      operations.push({ op: "delete", id: entry.id, ifRevision: entry.revision });
       continue;
     }
     const text =
@@ -252,6 +252,7 @@ export function planMemoryOperations(input: {
       kind: proposed.kind,
       text,
       sourceThreadId: input.threadId,
+      ifRevision: entry.revision,
     });
   }
   return operations;
@@ -288,8 +289,19 @@ export function selectMemoryDelivery(input: {
 }): MemoryDelivery {
   const { workstream, membership, entries } = input;
   const revision = workstream.memoryRevision;
-  if (!workstream.memory.enabled || entries.length === 0) return { text: "", revision };
+  if (!workstream.memory.enabled) return { text: "", revision };
   const firstDelivery = membership.deliveredProviderThreadId !== input.providerThreadId;
+  if (firstDelivery && entries.length === 0) return { text: "", revision };
+  // A removal leaves no entry to mention, so the session is given the memory again in full.
+  if (!firstDelivery && workstream.memoryRemovedRevision > membership.deliveredRevision) {
+    return {
+      revision,
+      text: [
+        `Entries were removed from the shared memory of the workstream "${workstream.name}" since your last turn. This is all of it now and replaces what you were given before:`,
+        ...(entries.length === 0 ? ["(empty)"] : renderEntries(entries)),
+      ].join("\n"),
+    };
+  }
   if (firstDelivery) {
     return {
       revision,

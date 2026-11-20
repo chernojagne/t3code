@@ -49,6 +49,7 @@ const make = Effect.gen(function* () {
           delivered: repository
             .setThreadDelivery({
               threadId: input.threadId,
+              workstreamId: workstream.value.id,
               providerThreadId: input.providerThreadId,
               revision: delivery.revision,
             })

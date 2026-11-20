@@ -293,6 +293,10 @@ const make = Effect.gen(function* () {
               kind: mutation.kind,
               text: mutation.text,
               locked: mutation.locked,
+              // The user now owns the wording, so every session is told, its first author included.
+              ...(mutation.kind === undefined && mutation.text === undefined
+                ? {}
+                : { sourceThreadId: null }),
             },
           ],
         });

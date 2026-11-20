@@ -62,5 +62,24 @@ it.effect("a new session inherits the memory, then hears only what others add", 
     const delta = yield* delivery.pending(turn);
     assert.include(delta.text, "Port the refund flow.");
     assert.notInclude(delta.text, "Keep v1 until March.");
+
+    // Moved between the read and the provider's answer: the old workstream's mark must not land.
+    const other = yield* service.mutate({
+      type: "workstream.create",
+      name: "Flaky deploys" as never,
+    });
+    yield* service.remember({
+      workstreamId: other.workstreamId!,
+      threadId: OTHER_THREAD,
+      kind: "fact",
+      text: "Deploys flake on the arm runners.",
+    });
+    yield* service.mutate({
+      type: "thread.assign",
+      threadId: THREAD,
+      workstreamId: other.workstreamId!,
+    });
+    yield* delta.delivered;
+    assert.include((yield* delivery.pending(turn)).text, "Deploys flake on the arm runners.");
   }).pipe(Effect.provide(layerTest)),
 );

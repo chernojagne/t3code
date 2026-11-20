@@ -158,6 +158,25 @@ it.effect("memory survives after the session that wrote it leaves, and edits bum
       [["Keep v1 until March.", THREAD, true]],
     );
     assert.isTrue(entries[0]!.revision > saved.revision);
+
+    // An automatic update planned before the lock must not land after it.
+    yield* service.applyMemoryOperations({
+      workstreamId,
+      operations: [
+        { op: "update", id: saved.id, text: "Drop v1 now.", ifRevision: saved.revision },
+        { op: "delete", id: saved.id, ifRevision: saved.revision },
+      ],
+    });
+    // Rewording an entry makes it the user's, so its first author is told about it too.
+    yield* service.mutateMemory({
+      type: "entry.update",
+      entryId: saved.id,
+      text: "Keep v1 until April." as never,
+    });
+    assert.deepStrictEqual(
+      (yield* service.listEntries(workstreamId)).map((entry) => [entry.text, entry.sourceThreadId]),
+      [["Keep v1 until April.", null]],
+    );
     yield* service.mutateMemory({ type: "memory.clear", workstreamId });
     assert.deepStrictEqual(yield* service.listEntries(workstreamId), []);
   }).pipe(Effect.provide(layerTest)),

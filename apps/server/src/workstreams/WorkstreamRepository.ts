@@ -31,6 +31,10 @@ interface WorkstreamRow {
   readonly updated_at: string;
 }
 
+interface WorkstreamReadRow extends WorkstreamRow {
+  readonly removed_revision: number | null;
+}
+
 interface ThreadRow {
   readonly thread_id: ThreadId;
   readonly workstream_id: WorkstreamId;
@@ -62,6 +66,8 @@ interface ConfigRow {
 export interface WorkstreamRecord extends Workstream {
   /** Bumped by every memory write; entries carry the revision that last wrote them. */
   readonly memoryRevision: number;
+  /** The revision that last removed an entry. Removals leave no entry to carry it. */
+  readonly memoryRemovedRevision: number;
 }
 
 export interface WorkstreamThreadRecord extends WorkstreamMembership {
@@ -94,10 +100,16 @@ export type WorkstreamMemoryOperation =
       readonly text?: string | undefined;
       readonly locked?: boolean | undefined;
       readonly sourceThreadId?: ThreadId | null | undefined;
+      /** Set by automatic updates: apply only to an unlocked entry still at this revision. */
+      readonly ifRevision?: number | undefined;
     }
-  | { readonly op: "delete"; readonly id: WorkstreamMemoryEntryId };
+  | {
+      readonly op: "delete";
+      readonly id: WorkstreamMemoryEntryId;
+      readonly ifRevision?: number | undefined;
+    };
 
-const toWorkstream = (row: WorkstreamRow): WorkstreamRecord => ({
+const toWorkstream = (row: WorkstreamReadRow): WorkstreamRecord => ({
   id: row.workstream_id,
   name: row.name as Workstream["name"],
   orderKey: row.order_key,
@@ -108,6 +120,7 @@ const toWorkstream = (row: WorkstreamRow): WorkstreamRecord => ({
     budgetChars: row.memory_budget_chars,
   },
   memoryRevision: row.memory_revision,
+  memoryRemovedRevision: row.removed_revision ?? 0,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -162,8 +175,10 @@ export class WorkstreamRepository extends Context.Service<
       readonly pinOrderKey: string | null;
     }) => Sql<void>;
     readonly setThreadMemoryRun: (threadId: ThreadId, runId: string) => Sql<void>;
+    /** Does nothing if the thread has left `workstreamId` since the memory was read. */
     readonly setThreadDelivery: (input: {
       readonly threadId: ThreadId;
+      readonly workstreamId: WorkstreamId;
       readonly providerThreadId: string;
       readonly revision: number;
     }) => Sql<void>;
@@ -234,6 +249,12 @@ const make = Effect.gen(function* () {
     ON workstream_memory_entries (workstream_id, created_at)
   `;
   yield* sql`
+    CREATE TABLE IF NOT EXISTS workstream_memory_removals (
+      workstream_id TEXT PRIMARY KEY,
+      revision INTEGER NOT NULL
+    ) WITHOUT ROWID
+  `;
+  yield* sql`
     CREATE TABLE IF NOT EXISTS workstream_config (
       config_id INTEGER PRIMARY KEY CHECK (config_id = 1),
       gate_enabled INTEGER NOT NULL,
@@ -245,7 +266,12 @@ const make = Effect.gen(function* () {
   const getWorkstream = Effect.fn("WorkstreamRepository.getWorkstream")(function* (
     id: WorkstreamId,
   ) {
-    const rows = yield* sql<WorkstreamRow>`SELECT * FROM workstreams WHERE workstream_id = ${id}`;
+    const rows = yield* sql<WorkstreamReadRow>`
+      SELECT workstreams.*, removals.revision AS removed_revision
+      FROM workstreams
+      LEFT JOIN workstream_memory_removals AS removals USING (workstream_id)
+      WHERE workstream_id = ${id}
+    `;
     return Option.fromNullishOr(rows[0]).pipe(Option.map(toWorkstream));
   });
 
@@ -262,10 +288,20 @@ const make = Effect.gen(function* () {
     return rows[0]?.memory_revision ?? 0;
   });
 
+  const recordRemoval = (workstreamId: WorkstreamId, revision: number) =>
+    sql`
+      INSERT INTO workstream_memory_removals (workstream_id, revision)
+      VALUES (${workstreamId}, ${revision})
+      ON CONFLICT (workstream_id) DO UPDATE SET revision = excluded.revision
+    `;
+
   return WorkstreamRepository.of({
-    listWorkstreams: sql<WorkstreamRow>`SELECT * FROM workstreams ORDER BY order_key`.pipe(
-      Effect.map((rows) => rows.map(toWorkstream)),
-    ),
+    listWorkstreams: sql<WorkstreamReadRow>`
+      SELECT workstreams.*, removals.revision AS removed_revision
+      FROM workstreams
+      LEFT JOIN workstream_memory_removals AS removals USING (workstream_id)
+      ORDER BY order_key
+    `.pipe(Effect.map((rows) => rows.map(toWorkstream))),
     getWorkstream,
     insertWorkstream: Effect.fn("WorkstreamRepository.insertWorkstream")(function* (workstream) {
       yield* sql`
@@ -295,6 +331,7 @@ const make = Effect.gen(function* () {
     }),
     deleteWorkstream: Effect.fn("WorkstreamRepository.deleteWorkstream")(function* (id) {
       yield* sql`DELETE FROM workstream_memory_entries WHERE workstream_id = ${id}`;
+      yield* sql`DELETE FROM workstream_memory_removals WHERE workstream_id = ${id}`;
       yield* sql`DELETE FROM workstream_threads WHERE workstream_id = ${id}`;
       yield* sql`DELETE FROM workstreams WHERE workstream_id = ${id}`;
     }, sql.withTransaction),
@@ -348,7 +385,7 @@ const make = Effect.gen(function* () {
         UPDATE workstream_threads
         SET delivered_provider_thread_id = ${input.providerThreadId},
             delivered_revision = ${input.revision}
-        WHERE thread_id = ${input.threadId}
+        WHERE thread_id = ${input.threadId} AND workstream_id = ${input.workstreamId}
       `;
     }),
     listEntries: Effect.fn("WorkstreamRepository.listEntries")(function* (id) {
@@ -371,6 +408,9 @@ const make = Effect.gen(function* () {
       now,
     }) {
       const revision = yield* bumpRevision(workstreamId, now);
+      // The model answered against an older read; a user's edit or lock since then wins.
+      const unchanged = (ifRevision: number | undefined) =>
+        ifRevision === undefined ? sql`1 = 1` : sql`locked = 0 AND revision = ${ifRevision}`;
       for (const operation of operations) {
         switch (operation.op) {
           case "add":
@@ -395,29 +435,35 @@ const make = Effect.gen(function* () {
                 revision = ${revision},
                 updated_at = ${now}
               WHERE entry_id = ${operation.id} AND workstream_id = ${workstreamId}
+                AND ${unchanged(operation.ifRevision)}
             `;
             if (operation.sourceThreadId !== undefined) {
               yield* sql`
                 UPDATE workstream_memory_entries
                 SET source_thread_id = ${operation.sourceThreadId}
                 WHERE entry_id = ${operation.id} AND workstream_id = ${workstreamId}
+                  AND revision = ${revision}
               `;
             }
             break;
           }
-          case "delete":
-            yield* sql`
+          case "delete": {
+            const removed = yield* sql`
               DELETE FROM workstream_memory_entries
               WHERE entry_id = ${operation.id} AND workstream_id = ${workstreamId}
+                AND ${unchanged(operation.ifRevision)}
+              RETURNING entry_id
             `;
+            if (removed.length > 0) yield* recordRemoval(workstreamId, revision);
             break;
+          }
         }
       }
       return revision;
     }, sql.withTransaction),
     clearEntries: Effect.fn("WorkstreamRepository.clearEntries")(function* (id, now) {
       yield* sql`DELETE FROM workstream_memory_entries WHERE workstream_id = ${id}`;
-      yield* bumpRevision(id, now);
+      yield* recordRemoval(id, yield* bumpRevision(id, now));
     }, sql.withTransaction),
     getConfig: sql<ConfigRow>`SELECT * FROM workstream_config WHERE config_id = 1`.pipe(
       Effect.map((rows) => {

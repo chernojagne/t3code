@@ -20,6 +20,7 @@ const workstream = (overrides: Partial<WorkstreamRecord> = {}): WorkstreamRecord
   defaultProjectId: null,
   memory: { enabled: true, instructions: "", budgetChars: 6_000 },
   memoryRevision: 5,
+  memoryRemovedRevision: 0,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...overrides,
@@ -114,7 +115,7 @@ describe("planMemoryOperations", () => {
         sourceThreadId: THREAD,
         locked: false,
       },
-      { op: "delete", id: WorkstreamMemoryEntryId.make("memory:open") },
+      { op: "delete", id: WorkstreamMemoryEntryId.make("memory:open"), ifRevision: 1 },
     ]);
   });
 });
@@ -165,6 +166,32 @@ describe("selectMemoryDelivery", () => {
     assert.include(delivery.text, "The flag ships dark until Monday.");
     assert.notInclude(delivery.text, "I renamed the flag.");
     assert.notInclude(delivery.text, "Staging uses the eu-west cluster.");
+  });
+
+  it("replaces the session's copy after a removal, even when nothing is left", () => {
+    const seen = membership({
+      deliveredProviderThreadId: "provider-thread:a",
+      deliveredRevision: 5,
+    });
+    const removed = workstream({ memoryRevision: 6, memoryRemovedRevision: 6 });
+    const replaced = selectMemoryDelivery({
+      workstream: removed,
+      membership: seen,
+      entries: entries.slice(0, 1),
+      providerThreadId: "provider-thread:a",
+    });
+    assert.include(replaced.text, "replaces what you were given before");
+    assert.include(replaced.text, "Staging uses the eu-west cluster.");
+    assert.notInclude(replaced.text, "The flag ships dark until Monday.");
+    assert.include(
+      selectMemoryDelivery({
+        workstream: removed,
+        membership: seen,
+        entries: [],
+        providerThreadId: "provider-thread:a",
+      }).text,
+      "(empty)",
+    );
   });
 
   it("starts over when the session moves to a new provider thread", () => {
