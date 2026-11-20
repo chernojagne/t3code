@@ -83,10 +83,17 @@ const make = Effect.gen(function* () {
       runIds: [input.runId],
     });
     const run = records.runs.find((candidate) => candidate.id === input.runId);
+    if (run === undefined) return "filtered" as const;
+    // A finished run still gets bookkeeping updates after later runs; it was judged already.
+    if (run.ordinal <= membership.value.memoryRunOrdinal) return "already-done" as const;
     const digest = makeTurnDigest(records.turnItems);
     // Marked before the model calls: a turn is judged once, even if a later step fails.
-    yield* repository.setThreadMemoryRun(input.threadId, input.runId);
-    if (run === undefined || !isTurnWorthConsidering({ runStatus: run.status, digest })) {
+    yield* repository.setThreadMemoryRun({
+      threadId: input.threadId,
+      runId: input.runId,
+      ordinal: run.ordinal,
+    });
+    if (!isTurnWorthConsidering({ runStatus: run.status, digest })) {
       return "filtered" as const;
     }
 
@@ -195,6 +202,16 @@ const make = Effect.gen(function* () {
                 ),
               );
             }
+            // Archived threads leave the list and restored ones return to it.
+            case "thread.archived":
+            case "thread.unarchived":
+              return workstreams
+                .threadChanged({ threadId: event.threadId, deleted: false })
+                .pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Could not refresh a thread's workstream", { cause }),
+                  ),
+                );
             case "thread.deleted":
               return workstreams.threadChanged({ threadId: event.threadId, deleted: true }).pipe(
                 Effect.catch((cause) =>

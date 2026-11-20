@@ -93,7 +93,8 @@ const SORT_MODE_LABELS: Record<WorkstreamSortMode, string> = {
 };
 const SORT_MODES = ["name", "staleness", "manual"] as const;
 
-const UNSORTED_PAGE_SIZE = 50;
+// The size of one older settled page, so one "Show more" is at most one read per environment.
+const UNSORTED_PAGE_SIZE = 25;
 
 // A dragged workstream only reorders among workstreams. A dragged thread lands on the pinned
 // row under the pointer, else on the section under it.
@@ -171,7 +172,8 @@ export default function WorkstreamSidebar() {
   const runMutation = useWorkstreamMutation();
   const handleNewThread = useNewThreadHandler();
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
-  const [unsortedLimit, setUnsortedLimit] = useState(UNSORTED_PAGE_SIZE);
+  // Null until the user asks for more; only then may the unsorted section read older pages.
+  const [unsortedRequested, setUnsortedRequested] = useState<number | null>(null);
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 6 } }),
@@ -203,15 +205,6 @@ export default function WorkstreamSidebar() {
           ],
     ),
   );
-  const memberPages = useWorkstreamMemberPages({
-    environmentIds: states.map((entry) => entry.environmentId),
-    missingByEnvironment: new Map(
-      [...memberCountsByEnvironment].map(([environmentId, counts]) => [
-        environmentId,
-        counts.missing,
-      ]),
-    ),
-  });
   const models = states.flatMap((entry) =>
     entry.state === null
       ? []
@@ -251,7 +244,41 @@ export default function WorkstreamSidebar() {
   const showEnvironment = states.length > 1;
   const activeThreadKey =
     routeTarget?.kind === "server" ? scopedThreadKey(routeTarget.threadRef) : null;
-  const unsortedCollapsed = isUnsortedCollapsed(collapsedKeys.keys, unsorted.length);
+  const unsortedLimit = unsortedRequested ?? UNSORTED_PAGE_SIZE;
+  const memberPages = useWorkstreamMemberPages({
+    environmentIds: states.map((entry) => entry.environmentId),
+    missingByEnvironment: new Map(
+      [...memberCountsByEnvironment].map(([environmentId, counts]) => [
+        environmentId,
+        counts.missing,
+      ]),
+    ),
+    // "Show more" saves the section as open, so the loaded count cannot fold it here.
+    unsortedWantsRows:
+      unsortedRequested !== null &&
+      unsortedRequested > unsorted.length &&
+      !isUnsortedCollapsed(collapsedKeys.keys, unsorted.length),
+  });
+  // The shelf counts every unloaded older thread; members still missing are not unsorted.
+  const unsortedUnloaded = Math.max(
+    0,
+    memberPages.unloadedCount(threads) -
+      [...memberCountsByEnvironment].reduce(
+        (sum, [environmentId, counts]) =>
+          sum + (memberPages.isExhausted(environmentId) ? 0 : counts.missing),
+        0,
+      ),
+  );
+  const unsortedTotal = unsorted.length + unsortedUnloaded;
+  const unsortedCollapsed = isUnsortedCollapsed(collapsedKeys.keys, unsortedTotal);
+  const unsortedShown = Math.min(unsortedLimit, unsorted.length);
+  const unsortedLoadingMore =
+    unsortedRequested !== null && unsortedRequested > unsorted.length && memberPages.hasUnreadPages;
+  const showMoreUnsorted = () => {
+    const change = unsortedCollapseChange(false);
+    collapsedKeys.replace(change.remove, change.add);
+    setUnsortedRequested(unsortedShown + UNSORTED_PAGE_SIZE);
+  };
   const serverStateOf = (environmentId: EnvironmentId): WorkstreamState | null =>
     stateByEnvironment.get(environmentId)?.serverState ?? null;
   const canMutate = (environmentId: EnvironmentId) => editableEnvironmentIds.has(environmentId);
@@ -683,9 +710,9 @@ export default function WorkstreamSidebar() {
                   )}
                 </li>
               ) : null}
-              {unsorted.length > 0 ? (
+              {unsortedTotal > 0 ? (
                 <UnsortedSection
-                  count={unsorted.length}
+                  count={unsortedTotal}
                   collapsed={unsortedCollapsed}
                   onToggle={() => {
                     const change = unsortedCollapseChange(!unsortedCollapsed);
@@ -693,16 +720,35 @@ export default function WorkstreamSidebar() {
                   }}
                 >
                   {unsorted.slice(0, unsortedLimit).map((thread) => renderThread(thread, false))}
-                  {unsorted.length > unsortedLimit ? (
+                  {unsortedLoadingMore && (memberPages.loading || memberPages.failed) ? (
                     <li className="list-none">
                       <button
                         type="button"
-                        onClick={() => setUnsortedLimit((limit) => limit + UNSORTED_PAGE_SIZE)}
+                        aria-disabled={!memberPages.failed}
+                        onClick={() => {
+                          if (memberPages.failed) memberPages.retry();
+                        }}
+                        className="flex h-8 w-full items-center rounded-(--control-radius) pr-2 pl-8 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover aria-disabled:cursor-default aria-disabled:hover:bg-transparent"
+                      >
+                        {memberPages.failed
+                          ? gt("Could not load older threads. Retry")
+                          : gt("Loading")}
+                      </button>
+                    </li>
+                  ) : unsorted.length > unsortedLimit || memberPages.hasUnreadPages ? (
+                    <li className="list-none">
+                      <button
+                        type="button"
+                        data-testid="workstream-unsorted-more"
+                        onClick={showMoreUnsorted}
                         className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-(--control-radius) pr-2 pl-8 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                       >
                         <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
                         {gt("{count, plural, one {Show {count} more} other {Show {count} more}}", {
-                          count: Math.min(unsorted.length - unsortedLimit, UNSORTED_PAGE_SIZE),
+                          count:
+                            unsortedTotal > unsortedShown
+                              ? Math.min(unsortedTotal - unsortedShown, UNSORTED_PAGE_SIZE)
+                              : UNSORTED_PAGE_SIZE,
                         })}
                       </button>
                     </li>

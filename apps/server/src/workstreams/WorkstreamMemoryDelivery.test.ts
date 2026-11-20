@@ -45,6 +45,12 @@ it.effect("a new session inherits the memory, then hears only what others add", 
     assert.include((yield* delivery.pending(turn)).text, "Keep v1 until March.");
     yield* first.delivered;
     assert.strictEqual((yield* delivery.pending(turn)).text, "");
+    // Once the provider names its session the mark binds to it, so a replacement starts over.
+    assert.strictEqual((yield* delivery.pending({ ...turn, nativeThreadId: "native-1" })).text, "");
+    const replaced = { ...turn, nativeThreadId: "native-2" };
+    const again = yield* delivery.pending(replaced);
+    assert.include(again.text, "Keep v1 until March.");
+    yield* again.delivered;
 
     yield* service.remember({
       workstreamId: workstreamId!,
@@ -52,14 +58,14 @@ it.effect("a new session inherits the memory, then hears only what others add", 
       kind: "fact",
       text: "My own note.",
     });
-    assert.strictEqual((yield* delivery.pending(turn)).text, "");
+    assert.strictEqual((yield* delivery.pending(replaced)).text, "");
     yield* service.remember({
       workstreamId: workstreamId!,
       threadId: OTHER_THREAD,
       kind: "open_item",
       text: "Port the refund flow.",
     });
-    const delta = yield* delivery.pending(turn);
+    const delta = yield* delivery.pending(replaced);
     assert.include(delta.text, "Port the refund flow.");
     assert.notInclude(delta.text, "Keep v1 until March.");
 
@@ -80,6 +86,6 @@ it.effect("a new session inherits the memory, then hears only what others add", 
       workstreamId: other.workstreamId!,
     });
     yield* delta.delivered;
-    assert.include((yield* delivery.pending(turn)).text, "Deploys flake on the arm runners.");
+    assert.include((yield* delivery.pending(replaced)).text, "Deploys flake on the arm runners.");
   }).pipe(Effect.provide(layerTest)),
 );

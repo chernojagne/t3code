@@ -235,11 +235,13 @@ describe("workstream members among older settled threads", () => {
   const want = (
     environments: Parameters<typeof wantedWorkstreamMemberPages<string>>[0]["environments"],
     missing: ReadonlyArray<readonly [string, number]>,
+    unsortedWantsRows = false,
   ) =>
     wantedWorkstreamMemberPages({
       requested,
       environments,
       missingByEnvironment: new Map(missing),
+      unsortedWantsRows,
     });
 
   it("asks one more page only of environments that still miss a member", () => {
@@ -260,6 +262,16 @@ describe("workstream members among older settled threads", () => {
       "env-b": 2,
       "env-c": 1,
     });
+  });
+
+  it("asks one more page of every environment with pages left when unsorted wants rows", () => {
+    const environments = new Map([
+      ["env-a", pages("ready", "cursor")],
+      ["env-b", pages("ready", null)],
+      ["env-c", pages("pending", "cursor")],
+    ]);
+    expect(Object.fromEntries(want(environments, [], true))).toEqual({ "env-a": 2, "env-b": 2 });
+    expect(want(new Map([["env-b", pages("ready", null)]]), [], true)).toBe(requested);
   });
 
   it("keeps the request while nothing is missing, a read is in flight, or no page is left", () => {

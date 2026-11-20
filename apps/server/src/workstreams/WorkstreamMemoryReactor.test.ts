@@ -24,7 +24,8 @@ import * as WorkstreamMemoryGate from "./WorkstreamMemoryGate.ts";
 import * as WorkstreamMemoryReactor from "./WorkstreamMemoryReactor.ts";
 import * as WorkstreamService from "./WorkstreamService.ts";
 
-const RUN = RunId.make("run:one");
+const RUN = RunId.make("run:two");
+const EARLIER_RUN = RunId.make("run:one");
 const DECISION = "We keep the v1 endpoint until every client has moved to v2, per the user.";
 
 interface Scenario {
@@ -57,7 +58,10 @@ function setup(scenario: Scenario = {}) {
                 messageItem("user", "Which endpoint do we keep while clients migrate?"),
                 messageItem("assistant", DECISION),
               ],
-              runs: [{ id: RUN, status: scenario.runStatus ?? "completed" }],
+              runs: [
+                { id: RUN, ordinal: 2, status: scenario.runStatus ?? "completed" },
+                { id: EARLIER_RUN, ordinal: 1, status: "completed" },
+              ],
             } as never),
         }),
         Layer.mock(WorkstreamMemoryGate.WorkstreamMemoryGate)({
@@ -110,6 +114,11 @@ it.effect("folds a finished turn into memory once, and it outlives the session",
     assert.strictEqual(yield* reactor.consolidate({ threadId: THREAD, runId: RUN }), "updated");
     assert.strictEqual(
       yield* reactor.consolidate({ threadId: THREAD, runId: RUN }),
+      "already-done",
+    );
+    // A late bookkeeping update to an earlier finished run must not be judged after a newer one.
+    assert.strictEqual(
+      yield* reactor.consolidate({ threadId: THREAD, runId: EARLIER_RUN }),
       "already-done",
     );
     assert.deepStrictEqual(calls, { gate: 1, merge: 1 });

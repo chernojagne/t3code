@@ -41,6 +41,7 @@ interface ThreadRow {
   readonly pinned_at: string | null;
   readonly pin_order_key: string | null;
   readonly memory_run_id: string | null;
+  readonly memory_run_ordinal: number;
   readonly delivered_provider_thread_id: string | null;
   readonly delivered_revision: number;
 }
@@ -71,8 +72,9 @@ export interface WorkstreamRecord extends Workstream {
 }
 
 export interface WorkstreamThreadRecord extends WorkstreamMembership {
-  /** The last run whose turn was folded into memory. */
+  /** The newest run judged for memory. Earlier runs are never judged again. */
   readonly memoryRunId: string | null;
+  readonly memoryRunOrdinal: number;
   /** The provider thread that last received memory, and the revision it saw. */
   readonly deliveredProviderThreadId: string | null;
   readonly deliveredRevision: number;
@@ -131,6 +133,7 @@ const toThread = (row: ThreadRow): WorkstreamThreadRecord => ({
   pinnedAt: row.pinned_at,
   pinOrderKey: row.pin_order_key,
   memoryRunId: row.memory_run_id,
+  memoryRunOrdinal: row.memory_run_ordinal,
   deliveredProviderThreadId: row.delivered_provider_thread_id,
   deliveredRevision: row.delivered_revision,
 });
@@ -161,7 +164,10 @@ export class WorkstreamRepository extends Context.Service<
     readonly updateWorkstream: (workstream: Workstream) => Sql<void>;
     /** Deletes the workstream with its memberships and memory. */
     readonly deleteWorkstream: (id: WorkstreamId) => Sql<void>;
-    /** Memberships whose thread exists. A draft's row waits here until its first message. */
+    /**
+     * Memberships of threads a client can list. A draft's row waits until its first message, and
+     * an archived thread keeps its row for when it is restored.
+     */
     readonly listThreads: Sql<ReadonlyArray<WorkstreamThreadRecord>>;
     readonly getThread: (threadId: ThreadId) => Sql<Option.Option<WorkstreamThreadRecord>>;
     /** Null removes the thread from its workstream. A move resets its pin and delivery marks. */
@@ -175,7 +181,11 @@ export class WorkstreamRepository extends Context.Service<
       readonly pinnedAt: string | null;
       readonly pinOrderKey: string | null;
     }) => Sql<void>;
-    readonly setThreadMemoryRun: (threadId: ThreadId, runId: string) => Sql<void>;
+    readonly setThreadMemoryRun: (input: {
+      readonly threadId: ThreadId;
+      readonly runId: string;
+      readonly ordinal: number;
+    }) => Sql<void>;
     /** Does nothing if the thread has left `workstreamId` since the memory was read. */
     readonly setThreadDelivery: (input: {
       readonly threadId: ThreadId;
@@ -224,10 +234,20 @@ const make = Effect.gen(function* () {
       pin_order_key TEXT,
       added_at TEXT NOT NULL,
       memory_run_id TEXT,
+      memory_run_ordinal INTEGER NOT NULL DEFAULT 0,
       delivered_provider_thread_id TEXT,
       delivered_revision INTEGER NOT NULL DEFAULT 0
     ) WITHOUT ROWID
   `;
+  // Columns added after the first build: CREATE TABLE IF NOT EXISTS leaves an older table as it was.
+  const threadColumns = yield* sql<{ readonly name: string }>`
+    SELECT name FROM pragma_table_info('workstream_threads')
+  `;
+  if (!threadColumns.some((column) => column.name === "memory_run_ordinal")) {
+    yield* sql`
+      ALTER TABLE workstream_threads ADD COLUMN memory_run_ordinal INTEGER NOT NULL DEFAULT 0
+    `;
+  }
   yield* sql`
     CREATE INDEX IF NOT EXISTS workstream_threads_by_workstream
     ON workstream_threads (workstream_id)
@@ -340,7 +360,7 @@ const make = Effect.gen(function* () {
       SELECT memberships.*
       FROM workstream_threads AS memberships
       JOIN orchestration_v2_projection_threads AS threads USING (thread_id)
-      WHERE threads.deleted_at IS NULL
+      WHERE threads.deleted_at IS NULL AND threads.archived_at IS NULL
     `.pipe(Effect.map((rows) => rows.map(toThread))),
     getThread: Effect.fn("WorkstreamRepository.getThread")(function* (threadId) {
       const rows = yield* sql<ThreadRow>`
@@ -377,13 +397,13 @@ const make = Effect.gen(function* () {
         WHERE thread_id = ${input.threadId}
       `;
     }),
-    setThreadMemoryRun: Effect.fn("WorkstreamRepository.setThreadMemoryRun")(
-      function* (threadId, runId) {
-        yield* sql`
-        UPDATE workstream_threads SET memory_run_id = ${runId} WHERE thread_id = ${threadId}
+    setThreadMemoryRun: Effect.fn("WorkstreamRepository.setThreadMemoryRun")(function* (input) {
+      yield* sql`
+        UPDATE workstream_threads
+        SET memory_run_id = ${input.runId}, memory_run_ordinal = ${input.ordinal}
+        WHERE thread_id = ${input.threadId}
       `;
-      },
-    ),
+    }),
     setThreadDelivery: Effect.fn("WorkstreamRepository.setThreadDelivery")(function* (input) {
       yield* sql`
         UPDATE workstream_threads

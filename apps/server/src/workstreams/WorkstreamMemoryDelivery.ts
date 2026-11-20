@@ -40,6 +40,22 @@ const make = Effect.gen(function* () {
         const workstream = yield* repository.getWorkstream(membership.value.workstreamId);
         if (Option.isNone(workstream)) return NOTHING;
         const conversation = memoryConversationKey(input);
+        // The first turn was recorded before the provider named its session. Bind the mark to
+        // that session now, so a replacement session is recognised as new.
+        const recorded = membership.value.deliveredProviderThreadId;
+        if (
+          recorded !== null &&
+          recorded !== conversation &&
+          recorded.endsWith("|") &&
+          conversation.startsWith(recorded)
+        ) {
+          yield* repository.setThreadDelivery({
+            threadId: input.threadId,
+            workstreamId: workstream.value.id,
+            providerThreadId: conversation,
+            revision: membership.value.deliveredRevision,
+          });
+        }
         const delivery = selectMemoryDelivery({
           workstream: workstream.value,
           membership: membership.value,

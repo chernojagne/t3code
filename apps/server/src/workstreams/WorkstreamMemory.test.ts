@@ -32,6 +32,7 @@ const membership = (overrides: Partial<WorkstreamThreadRecord> = {}): Workstream
   pinnedAt: null,
   pinOrderKey: null,
   memoryRunId: null,
+  memoryRunOrdinal: 0,
   deliveredProviderThreadId: null,
   deliveredRevision: 0,
   ...overrides,
