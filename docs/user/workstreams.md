@@ -17,7 +17,12 @@ command palette, or the `sidebar.toggleWorkstreams` keybinding. The choice is sa
 - Move a thread with its menu, by dragging it onto another workstream, or with **Move thread to
   workstream** in the command palette. Threads in no workstream are listed under **Unsorted**.
 - Give a workstream a default project. New threads started from the workstream use that project
-  and join the workstream.
+  and join the workstream. **New project…** in the same menu creates a project and makes it the
+  default.
+- Search narrows the list to workstreams whose name matches and threads whose title matches. It
+  covers the threads already loaded, not message text.
+- Each workstream gets an icon and color so it is easy to spot. Click the icon to choose another.
+- To settle, snooze or rename a thread, use the threads view.
 - Threads an agent starts from a thread in a workstream join the same workstream.
 
 Deleting a workstream keeps its threads, which become unsorted, and deletes its memory.

@@ -2,7 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { workstreamStalenessBucket } from "@t3tools/client-runtime/state/workstream-list";
-import type { ContextMenuSource } from "@t3tools/contracts";
+import type { ContextMenuSource, WorkstreamColor, WorkstreamIcon } from "@t3tools/contracts";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { ChevronDownIcon, EllipsisIcon, SquarePenIcon } from "lucide-react";
 import {
@@ -15,8 +15,10 @@ import {
 
 import { contextMenuSourceOf } from "../../contextMenuSource";
 import { useNowMinute } from "../../hooks/useNowMinute";
+import type { MessageResolver } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
 import { useThreadShell } from "../../state/entities";
+import { formatRelativeTime } from "../../timestampFormat";
 import type { SidebarThreadSummary } from "../../types";
 import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
@@ -25,7 +27,22 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { WorkstreamEntry } from "./workstreamData";
 import { parseWorkstreamDragId, workstreamDragId } from "./WorkstreamSidebar.logic";
-import { WorkstreamRelativeTime } from "./WorkstreamThreadRow";
+import { WorkstreamIconPicker } from "./WorkstreamIcon";
+
+function compactTimeLabel(timestamp: string, nowMs: number, resolve: MessageResolver) {
+  const parts = formatRelativeTime(timestamp, nowMs, resolve);
+  if (parts === null) return "";
+  return parts.suffix === null ? resolve(msg("now", { $context: "relative time" })) : parts.value;
+}
+
+/** Subscribes to the minute tick itself, so only the label re-renders each minute. */
+function WorkstreamRelativeTime(props: { timestamp: string | null }) {
+  const nowMinute = useNowMinute();
+  const m = useMessages();
+  return props.timestamp === null
+    ? null
+    : compactTimeLabel(props.timestamp, Date.parse(`${nowMinute}:00.000Z`), m);
+}
 
 const STATUS_DOT_CLASS_NAME = {
   attention: "bg-warning",
@@ -157,6 +174,10 @@ export function WorkstreamRow(props: {
   ) => void;
   onCommitRename: (entry: WorkstreamEntry, name: string) => void;
   onCancelRename: () => void;
+  onAppearanceChange: (
+    entry: WorkstreamEntry,
+    change: { icon?: WorkstreamIcon; color?: WorkstreamColor },
+  ) => void;
   children: ReactNode;
 }) {
   const gt = useGT();
@@ -193,15 +214,18 @@ export function WorkstreamRow(props: {
         className="relative"
         onContextMenu={(event) => openMenu(event, { x: event.clientX, y: event.clientY })}
       >
+        {/* Outside the toggle: a button cannot hold the picker's own button. */}
+        <span className="absolute top-1 left-1.5 z-[1]">
+          <WorkstreamIconPicker
+            name={workstream.name}
+            icon={workstream.icon}
+            color={workstream.color}
+            disabled={!props.canMutate}
+            onChange={(change) => props.onAppearanceChange(entry, change)}
+          />
+        </span>
         {props.isRenaming ? (
-          <div className="flex h-8 items-center gap-2 px-(--sidebar-row-content-inset)">
-            <ChevronDownIcon
-              aria-hidden
-              className={cn(
-                "size-3 shrink-0 text-sidebar-muted-foreground",
-                collapsed && "-rotate-90",
-              )}
-            />
+          <div className="flex h-8 items-center gap-2.5 ps-9.5 pe-(--sidebar-row-content-inset)">
             <WorkstreamRenameInput
               name={workstream.name}
               onCommit={(name) => props.onCommitRename(entry, name)}
@@ -214,15 +238,8 @@ export function WorkstreamRow(props: {
             aria-expanded={!collapsed}
             {...listeners}
             onClick={() => props.onToggle(entry)}
-            className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            className="flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-(--control-radius) ps-9.5 pe-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
-            <ChevronDownIcon
-              aria-hidden
-              className={cn(
-                "size-3 shrink-0 text-sidebar-muted-foreground transition-transform",
-                collapsed && "-rotate-90",
-              )}
-            />
             <span
               dir="auto"
               className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground/90"
@@ -248,10 +265,17 @@ export function WorkstreamRow(props: {
                 {count}
               </span>
             </span>
+            <ChevronDownIcon
+              aria-hidden
+              className={cn(
+                "size-3 shrink-0 text-sidebar-muted-foreground transition-transform",
+                collapsed && "-rotate-90",
+              )}
+            />
           </button>
         )}
         {props.isRenaming ? null : (
-          <span className="absolute inset-y-0 right-1 flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/workstream:opacity-100 pointer-coarse:opacity-100">
+          <span className="absolute inset-y-0 right-6 flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/workstream:opacity-100 pointer-coarse:opacity-100">
             <Tooltip>
               <TooltipTrigger
                 render={

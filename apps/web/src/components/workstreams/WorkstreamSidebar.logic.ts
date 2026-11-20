@@ -71,6 +71,43 @@ export function unsortedCollapseChange(collapsed: boolean) {
   };
 }
 
+const searchTerms = (query: string) =>
+  query
+    .toLocaleLowerCase()
+    .split(/\s+/u)
+    .filter((term) => term !== "");
+
+/**
+ * Narrows the pane to a search: a workstream whose name matches keeps all its threads, any other
+ * keeps the threads whose title matches and is dropped when none do. Every term must match.
+ */
+export function filterWorkstreamSearch<
+  Thread extends { readonly title: string },
+  Entry extends {
+    readonly workstream: { readonly name: string };
+    readonly threads: ReadonlyArray<{ readonly thread: Thread }>;
+  },
+>(input: {
+  readonly query: string;
+  readonly entries: ReadonlyArray<Entry>;
+  readonly unsorted: ReadonlyArray<Thread>;
+}): { readonly entries: ReadonlyArray<Entry>; readonly unsorted: ReadonlyArray<Thread> } {
+  const terms = searchTerms(input.query);
+  if (terms.length === 0) return { entries: input.entries, unsorted: input.unsorted };
+  const matches = (text: string) => {
+    const lower = text.toLocaleLowerCase();
+    return terms.every((term) => lower.includes(term));
+  };
+  return {
+    entries: input.entries.flatMap((entry) => {
+      if (matches(entry.workstream.name)) return [entry];
+      const threads = entry.threads.filter((member) => matches(member.thread.title));
+      return threads.length === 0 ? [] : [{ ...entry, threads }];
+    }),
+    unsorted: input.unsorted.filter((thread) => matches(thread.title)),
+  };
+}
+
 /** The mutation that pins a thread at the top of its workstream's pinned run. */
 export function pinThreadMutation(state: WorkstreamState, threadId: ThreadId): WorkstreamMutation {
   const workstreamId = state.memberships.find(

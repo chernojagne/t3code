@@ -17,6 +17,8 @@ const workstream = (overrides: Partial<WorkstreamRecord> = {}): WorkstreamRecord
   id: WORKSTREAM,
   name: "Checkout rewrite" as WorkstreamRecord["name"],
   orderKey: "V",
+  icon: "rocket",
+  color: "blue",
   defaultProjectId: null,
   memory: { enabled: true, instructions: "", budgetChars: 6_000 },
   memoryRevision: 5,

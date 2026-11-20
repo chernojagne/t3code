@@ -12,6 +12,7 @@ import {
   type WorkstreamMutationResult,
   type WorkstreamState,
   WORKSTREAM_MEMORY_DEFAULT_BUDGET_CHARS,
+  defaultWorkstreamAppearance,
 } from "@t3tools/contracts";
 import { pinOrderKeyBetween } from "@t3tools/shared/pinOrderKey";
 import * as Context from "effect/Context";
@@ -180,9 +181,12 @@ const make = Effect.gen(function* () {
           case "workstream.create": {
             const existing = yield* repository.listWorkstreams;
             const lastKey = existing.at(-1)?.orderKey ?? null;
+            const id = WorkstreamId.make(yield* newId("workstream"));
             const workstream: Workstream = {
-              id: WorkstreamId.make(yield* newId("workstream")),
+              id,
               name: mutation.name,
+              // The id is random, so its default icon and color are too.
+              ...defaultWorkstreamAppearance(id),
               // A corrupt last key yields null; the id keeps the fallback unique and stable.
               orderKey: pinOrderKeyBetween(lastKey, null) ?? `${lastKey ?? ""}V`,
               defaultProjectId: mutation.defaultProjectId ?? null,
@@ -204,6 +208,8 @@ const make = Effect.gen(function* () {
             yield* repository.updateWorkstream({
               ...current,
               name: mutation.name ?? current.name,
+              icon: mutation.icon ?? current.icon,
+              color: mutation.color ?? current.color,
               defaultProjectId:
                 mutation.defaultProjectId === undefined
                   ? current.defaultProjectId

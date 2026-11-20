@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { SidebarThreadSummary } from "../../types";
 import type { WorkstreamEntry } from "./workstreamData";
 import {
+  filterWorkstreamSearch,
   isUnsortedCollapsed,
   parseWorkstreamDragId,
   planWorkstreamDrop,
@@ -30,6 +31,8 @@ function entry(
       environmentId: ownerEnvironmentId,
       name: id,
       orderKey,
+      icon: "rocket",
+      color: "blue",
       defaultProjectId: null,
       memory: { enabled: true, instructions: "", budgetChars: 6_000 },
       createdAt: "2026-03-09T10:00:00.000Z",
@@ -128,5 +131,39 @@ describe("drag ids and the unsorted section", () => {
     expect(isUnsortedCollapsed([], 30)).toBe(true);
     expect(isUnsortedCollapsed(unsortedCollapseChange(false).add, 30)).toBe(false);
     expect(isUnsortedCollapsed(unsortedCollapseChange(true).add, 3)).toBe(true);
+  });
+});
+
+describe("filterWorkstreamSearch", () => {
+  const titled = (id: string, title: string) => ({ id, title });
+  const checkout = {
+    workstream: { name: "Checkout rewrite" },
+    threads: [{ thread: titled("a", "Fix cart totals") }, { thread: titled("b", "Tax rounding") }],
+  };
+  const infra = {
+    workstream: { name: "Infra" },
+    threads: [{ thread: titled("c", "Rotate cart service keys") }],
+  };
+  const unsorted = [titled("d", "Cart icon"), titled("e", "Readme")];
+
+  it("keeps a matching workstream whole and narrows the others to matching threads", () => {
+    expect(
+      filterWorkstreamSearch({ query: "  CART ", entries: [checkout, infra], unsorted }),
+    ).toEqual({
+      entries: [{ ...checkout, threads: [checkout.threads[0]] }, infra],
+      unsorted: [unsorted[0]],
+    });
+    expect(
+      filterWorkstreamSearch({ query: "checkout", entries: [checkout, infra], unsorted }),
+    ).toEqual({ entries: [checkout], unsorted: [] });
+    expect(
+      filterWorkstreamSearch({ query: "cart keys", entries: [checkout, infra], unsorted }).entries,
+    ).toEqual([infra]);
+  });
+
+  it("returns the lists untouched for a blank query", () => {
+    const result = filterWorkstreamSearch({ query: "  ", entries: [checkout], unsorted });
+    expect(result.entries).toEqual([checkout]);
+    expect(result.unsorted).toBe(unsorted);
   });
 });

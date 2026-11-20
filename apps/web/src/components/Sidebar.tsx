@@ -306,7 +306,7 @@ function sameSidebarProviderEntries(
 }
 
 // Resolve providers per environment because default instance ids collide across environments.
-const sidebarProviderEntriesAtom = Atom.make((get) => {
+export const sidebarProviderEntriesAtom = Atom.make((get) => {
   const providersByEnvironment = get(environmentPresentations.providersByEnvironmentAtom);
   const derived = deriveProviderEntriesByEnvironment(
     [...get(environmentPresentations.serverConfigsAtom)].map(

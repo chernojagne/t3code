@@ -32,6 +32,8 @@ function workstream(id: string, name: string, orderKey: string): Workstream {
     id: WorkstreamId.make(id),
     name,
     orderKey,
+    icon: "rocket",
+    color: "blue",
     defaultProjectId: null,
     memory: { enabled: true, instructions: "", budgetChars: 6_000 },
     createdAt: at(1),

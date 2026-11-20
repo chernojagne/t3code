@@ -11,6 +11,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import { useAtomValue } from "@effect/atom-react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
   scopedThreadKey,
@@ -31,15 +32,27 @@ import type {
   EnvironmentId,
   ProjectId,
   ScopedThreadRef,
+  WorkstreamColor,
+  WorkstreamIcon,
   WorkstreamId,
   WorkstreamState,
 } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { msg, T, useGT, useLocale, useMessages } from "gt-react";
-import { ArrowDownUpIcon, ChevronDownIcon, PlusIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import {
+  ArrowDownUpIcon,
+  ChevronDownIcon,
+  FolderPlusIcon,
+  PlusIcon,
+  SearchIcon,
+  XIcon,
+} from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { openCommandPalette } from "../../commandPaletteBus";
 import { isElectron } from "../../env";
+import { useClientSettings } from "../../hooks/useSettings";
+import { useSidebarProjectGroups } from "../../hooks/useSidebarProjectGroups";
 import {
   readLastUsedProjectKey,
   resolveDefaultProjectRef,
@@ -49,17 +62,20 @@ import { useThreadRouteTarget } from "../../hooks/useThreadRouteTarget";
 import { cn } from "../../lib/utils";
 import { readLocalApi } from "../../localApi";
 import { useDelegatedUnderParent, useProjects, useQuietThreadShells } from "../../state/entities";
-import { useEnvironmentIdentities } from "../../state/environments";
+import { useEnvironmentIdentities, useEnvironmentMachines } from "../../state/environments";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import type { SidebarThreadSummary } from "../../types";
 import { useUiStateStore } from "../../uiStateStore";
+import { sidebarProviderEntriesAtom } from "../Sidebar";
 import { filterSidebarV2VisibleThreads } from "../Sidebar.logic";
 import { SidebarChromeFooter, SidebarChromeHeader } from "../sidebar/SidebarChrome";
 import { SidebarFolderDrop } from "../sidebar/SidebarFolderDrop";
 import { SidebarHeaderIconButton } from "../sidebar/SidebarThreadHeader";
+import { SortableThreadRow, type SidebarProviderEntry } from "../sidebar/SidebarThreadRow";
 import { Button } from "../ui/button";
+import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
-import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
+import { SidebarContent, SidebarGroup, SidebarInput, useSidebar } from "../ui/sidebar";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { useWorkstreamMemberPages } from "./useWorkstreamMemberPages";
 import { useWorkstreamMutation } from "./useWorkstreamMutation";
@@ -73,6 +89,7 @@ import {
 import { requestNewWorkstream } from "./workstreamDialogStore";
 import { WorkstreamRow } from "./WorkstreamRow";
 import {
+  filterWorkstreamSearch,
   isUnsortedCollapsed,
   parseWorkstreamDragId,
   pinThreadMutation,
@@ -82,7 +99,6 @@ import {
   unsortedCollapseChange,
   workstreamDragId,
 } from "./WorkstreamSidebar.logic";
-import { PinnedWorkstreamThreadRow, WorkstreamThreadRow } from "./WorkstreamThreadRow";
 import { WorkstreamThreadShortcuts } from "./WorkstreamThreadShortcuts";
 import { useWorkstreamCollapsedKeys, useWorkstreamSortMode } from "./workstreamView";
 
@@ -96,21 +112,54 @@ const SORT_MODES = ["name", "staleness", "manual"] as const;
 // The size of one older settled page, so one "Show more" is at most one read per environment.
 const UNSORTED_PAGE_SIZE = 25;
 
-// A dragged workstream only reorders among workstreams. A dragged thread lands on the pinned
-// row under the pointer, else on the section under it.
-const collisionDetection: CollisionDetection = (args) => {
-  if (parseWorkstreamDragId(args.active.id)?.kind === "workstream") {
-    return closestCenter({
-      ...args,
-      droppableContainers: args.droppableContainers.filter(
-        (container) => parseWorkstreamDragId(container.id)?.kind === "workstream",
-      ),
-    });
-  }
-  const hits = pointerWithin(args);
-  const row = hits.find((hit) => parseWorkstreamDragId(hit.id)?.kind === "thread");
-  return row ? [row] : hits;
-};
+const NO_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
+// A project made from a workstream's menu becomes its default only this soon after the request.
+const NEW_PROJECT_DEFAULT_WINDOW_MS = 10 * 60_000;
+const noop = () => {};
+
+interface PendingDefaultProject {
+  readonly environmentId: EnvironmentId;
+  readonly workstreamId: WorkstreamId;
+  readonly knownProjectIds: ReadonlySet<string>;
+  readonly requestedAt: number;
+}
+
+function requestDefaultProject(
+  environmentId: EnvironmentId,
+  workstreamId: WorkstreamId,
+  knownProjectIds: ReadonlyArray<string>,
+): PendingDefaultProject {
+  return {
+    environmentId,
+    workstreamId,
+    knownProjectIds: new Set(knownProjectIds),
+    requestedAt: Date.now(),
+  };
+}
+
+const isPendingDefaultProjectStale = (pending: PendingDefaultProject) =>
+  Date.now() - pending.requestedAt > NEW_PROJECT_DEFAULT_WINDOW_MS;
+const neverOpensPullRequestsInRightPanel = () => false;
+
+// A dragged workstream only reorders among workstreams. A dragged thread lands on the section
+// under the pointer; only a pinned thread over another pinned row lands on that row.
+const makeCollisionDetection =
+  (pinnedDragIds: ReadonlySet<string>): CollisionDetection =>
+  (args) => {
+    if (parseWorkstreamDragId(args.active.id)?.kind === "workstream") {
+      return closestCenter({
+        ...args,
+        droppableContainers: args.droppableContainers.filter(
+          (container) => parseWorkstreamDragId(container.id)?.kind === "workstream",
+        ),
+      });
+    }
+    const hits = pointerWithin(args);
+    const row = pinnedDragIds.has(String(args.active.id))
+      ? hits.find((hit) => pinnedDragIds.has(String(hit.id)))
+      : undefined;
+    return row ? [row] : hits.filter((hit) => parseWorkstreamDragId(hit.id)?.kind !== "thread");
+  };
 
 function UnsortedSection(props: {
   count: number;
@@ -129,26 +178,13 @@ function UnsortedSection(props: {
         acceptsDrop && "bg-sidebar-row-hover ring-1 ring-inset ring-primary/60",
       )}
     >
-      <button
-        type="button"
-        aria-expanded={!props.collapsed}
+      <CollapsibleSectionHeader
+        expanded={!props.collapsed}
         onClick={props.onToggle}
-        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        accessory={<span className="font-normal tabular-nums">{props.count}</span>}
       >
-        <ChevronDownIcon
-          aria-hidden
-          className={cn(
-            "size-3 shrink-0 text-sidebar-muted-foreground transition-transform",
-            props.collapsed && "-rotate-90",
-          )}
-        />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-muted-foreground">
-          <T context="section of threads that are in no workstream">Unsorted</T>
-        </span>
-        <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground">
-          {props.count}
-        </span>
-      </button>
+        <T context="section of threads that are in no workstream">Unsorted</T>
+      </CollapsibleSectionHeader>
       {props.collapsed ? null : <ul className="flex flex-col">{props.children}</ul>}
     </li>
   );
@@ -174,6 +210,13 @@ export default function WorkstreamSidebar() {
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
   // Null until the user asks for more; only then may the unsorted section read older pages.
   const [unsortedRequested, setUnsortedRequested] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingDefaultProjectRef = useRef<PendingDefaultProject | null>(null);
+  const providerEntriesByEnvironment = useAtomValue(sidebarProviderEntriesAtom);
+  const projectGroups = useSidebarProjectGroups();
+  const environmentMachineById = useEnvironmentMachines();
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 6 } }),
@@ -219,14 +262,14 @@ export default function WorkstreamSidebar() {
           }),
         ],
   );
-  const entries = sortWorkstreamEntries(
+  const allEntries = sortWorkstreamEntries(
     models.flatMap((model) => model.workstreams),
     sort,
     locale,
   );
   // Threads of an environment without workstreams stay reachable here; one still loading its
   // workstreams is left out so its threads do not flash through this section.
-  const unsorted = [
+  const allUnsorted = [
     ...models.flatMap((model) => model.unsorted),
     ...threads.filter((thread) => !stateByEnvironment.has(thread.environmentId)),
   ]
@@ -236,6 +279,12 @@ export default function WorkstreamSidebar() {
     }))
     .toSorted((left, right) => right.at - left.at)
     .map((entry) => entry.thread);
+  const searching = query.trim() !== "";
+  const { entries, unsorted } = filterWorkstreamSearch({
+    query,
+    entries: allEntries,
+    unsorted: allUnsorted,
+  });
   const loading = states.some((entry) => entry.state === null && !entry.failed);
   const failed = states.some((entry) => entry.failed);
   const labelByEnvironment = new Map(
@@ -244,7 +293,8 @@ export default function WorkstreamSidebar() {
   const showEnvironment = states.length > 1;
   const activeThreadKey =
     routeTarget?.kind === "server" ? scopedThreadKey(routeTarget.threadRef) : null;
-  const unsortedLimit = unsortedRequested ?? UNSORTED_PAGE_SIZE;
+  // A search lists every loaded match, so it neither pages nor folds a section.
+  const unsortedLimit = searching ? unsorted.length : (unsortedRequested ?? UNSORTED_PAGE_SIZE);
   const memberPages = useWorkstreamMemberPages({
     environmentIds: states.map((entry) => entry.environmentId),
     missingByEnvironment: new Map(
@@ -269,8 +319,26 @@ export default function WorkstreamSidebar() {
         0,
       ),
   );
-  const unsortedTotal = unsorted.length + unsortedUnloaded;
-  const unsortedCollapsed = isUnsortedCollapsed(collapsedKeys.keys, unsortedTotal);
+  const unsortedTotal = searching ? unsorted.length : unsorted.length + unsortedUnloaded;
+  const unsortedCollapsed = !searching && isUnsortedCollapsed(collapsedKeys.keys, unsortedTotal);
+  const isCollapsed = (key: string) => !searching && collapsedKeys.keys.includes(key);
+  const projectByKey = new Map(
+    projects.map((project) => [`${project.environmentId}:${project.id}`, project] as const),
+  );
+  const projectDisplayNameByKey = new Map(
+    projectGroups.flatMap((group) =>
+      group.memberProjects.map(
+        (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
+      ),
+    ),
+  );
+  const pinnedDragIds = new Set(
+    entries.flatMap((entry) =>
+      entry.threads.flatMap((member) =>
+        member.pinned ? [threadDragId(entry.workstream.environmentId, member.thread.id)] : [],
+      ),
+    ),
+  );
   const unsortedShown = Math.min(unsortedLimit, unsorted.length);
   const unsortedLoadingMore =
     unsortedRequested !== null && unsortedRequested > unsorted.length && memberPages.hasUnreadPages;
@@ -290,6 +358,8 @@ export default function WorkstreamSidebar() {
       params: buildThreadRouteParams(threadRef),
     });
   };
+
+  const openThreadFromRow = (_event: unknown, threadRef: ScopedThreadRef) => openThread(threadRef);
 
   const openNewWorkstream = () => {
     const [onlyEnvironment] = states;
@@ -315,6 +385,38 @@ export default function WorkstreamSidebar() {
       serverStateOf(environmentId),
     );
   };
+
+  const changeAppearance = (
+    entry: WorkstreamEntry,
+    change: { icon?: WorkstreamIcon; color?: WorkstreamColor },
+  ) => {
+    const { environmentId, id } = entry.workstream;
+    void runMutation(
+      environmentId,
+      { type: "workstream.update", workstreamId: id, ...change },
+      serverStateOf(environmentId),
+    );
+  };
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the project is created by the command palette, which reports nothing back; its arrival in the project list is the only signal.
+  useEffect(() => {
+    const pending = pendingDefaultProjectRef.current;
+    if (pending === null) return;
+    const created = projects.find(
+      (project) =>
+        project.environmentId === pending.environmentId &&
+        project.archivedAt == null &&
+        !pending.knownProjectIds.has(project.id),
+    );
+    if (created === undefined) return;
+    pendingDefaultProjectRef.current = null;
+    if (isPendingDefaultProjectStale(pending)) return;
+    void runMutation(pending.environmentId, {
+      type: "workstream.update",
+      workstreamId: pending.workstreamId,
+      defaultProjectId: created.id,
+    });
+  }, [projects, runMutation]);
 
   const newThreadInWorkstream = async (entry: WorkstreamEntry) => {
     const { environmentId, id, defaultProjectId } = entry.workstream;
@@ -381,6 +483,7 @@ export default function WorkstreamSidebar() {
             checked: project.id === defaultProjectId,
             separatorBefore: index === 0,
           })),
+          { id: "new-project", label: gt("New project…"), separatorBefore: true },
         ],
       },
       { id: "memory", label: gt("Memory settings"), separatorBefore: true },
@@ -397,6 +500,15 @@ export default function WorkstreamSidebar() {
     const action = clicked.value;
     if (action === "new-thread") {
       void newThreadInWorkstream(entry);
+    } else if (action === "new-project") {
+      pendingDefaultProjectRef.current = requestDefaultProject(
+        environmentId,
+        id,
+        projects.flatMap((project) =>
+          project.environmentId === environmentId ? [project.id] : [],
+        ),
+      );
+      openCommandPalette({ open: "add-project" });
     } else if (action === "rename") {
       setRenamingKey(workstreamKey(environmentId, id));
     } else if (action === "memory") {
@@ -424,6 +536,7 @@ export default function WorkstreamSidebar() {
         serverStateOf(environmentId),
       );
     } else if (action.startsWith("project:")) {
+      pendingDefaultProjectRef.current = null;
       const projectId = action.slice("project:".length);
       void runMutation(
         environmentId,
@@ -438,19 +551,19 @@ export default function WorkstreamSidebar() {
   };
 
   const openThreadMenu = async (
-    thread: SidebarThreadSummary,
+    threadRef: ScopedThreadRef,
     position: { x: number; y: number },
     source: ContextMenuSource,
   ) => {
     const api = readLocalApi();
     if (!api) return;
-    const { environmentId, id: threadId } = thread;
+    const { environmentId, threadId } = threadRef;
     const environmentState = stateByEnvironment.get(environmentId);
     const serverState = environmentState?.serverState ?? null;
     const membership =
       environmentState?.state?.memberships.find((entry) => entry.threadId === threadId) ?? null;
     const editable = canMutate(environmentId) && serverState !== null;
-    const targets = entries.filter((entry) => entry.workstream.environmentId === environmentId);
+    const targets = allEntries.filter((entry) => entry.workstream.environmentId === environmentId);
     const items: ContextMenuItem[] = [
       { id: "open", label: gt("Open", { $context: "verb, opens the thread" }) },
       {
@@ -522,7 +635,7 @@ export default function WorkstreamSidebar() {
     for (const mutation of planWorkstreamDrop({
       active,
       over,
-      entries,
+      entries: allEntries,
       manualOrder: sort === "manual",
     })) {
       void runMutation(active.environmentId, mutation, serverState);
@@ -531,28 +644,77 @@ export default function WorkstreamSidebar() {
 
   const listedThreadRefs = [
     ...entries.flatMap((entry) =>
-      collapsedKeys.keys.includes(
-        workstreamKey(entry.workstream.environmentId, entry.workstream.id),
-      )
+      isCollapsed(workstreamKey(entry.workstream.environmentId, entry.workstream.id))
         ? []
         : entry.threads.map((member) => member.thread),
     ),
     ...(unsortedCollapsed ? [] : unsorted.slice(0, unsortedLimit)),
   ].map((thread) => scopeThreadRef(thread.environmentId, thread.id));
 
+  const unpinInWorkstream = (threadRef: ScopedThreadRef) => {
+    void runMutation(
+      threadRef.environmentId,
+      { type: "thread.pin", threadId: threadRef.threadId, pinned: false },
+      serverStateOf(threadRef.environmentId),
+    );
+  };
+
+  // The threads pane's own row, so a thread reads the same in both panes. Settling, snoozing
+  // and renaming stay in the threads pane; here a pin is the workstream's.
   const renderThread = (thread: SidebarThreadSummary, pinned: boolean) => {
-    const Row = pinned ? PinnedWorkstreamThreadRow : WorkstreamThreadRow;
+    const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const projectKey = `${thread.environmentId}:${thread.projectId}` as const;
+    const settled = thread.settledAt != null;
     return (
-      <Row
-        key={`${thread.environmentId}:${thread.id}`}
+      <SortableThreadRow
+        key={threadKey}
+        sortableId={threadDragId(thread.environmentId, thread.id)}
+        contextDrag={false}
+        sortableDisabled={!canMutate(thread.environmentId)}
         thread={thread}
-        pinned={pinned}
-        isActive={
-          activeThreadKey === scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+        variant={settled ? "slim" : "card"}
+        variantAction={settled ? "unsettle" : "settle"}
+        settlementSupported={false}
+        snoozeSupported={false}
+        pinningSupported={canMutate(thread.environmentId)}
+        isPinned={pinned}
+        dropVerb={null}
+        dragOverPinned={false}
+        sweepAction={null}
+        snoozeWakeLabelText={null}
+        wokeAt={null}
+        isActive={activeThreadKey === threadKey}
+        isRouteThread={activeThreadKey === threadKey}
+        readOpensPullRequestsInRightPanel={neverOpensPullRequestsInRightPanel}
+        jumpLabel={null}
+        currentEnvironmentId={null}
+        environmentLabel={
+          showEnvironment ? (labelByEnvironment.get(thread.environmentId) ?? null) : null
         }
-        dragDisabled={!canMutate(thread.environmentId)}
-        onOpen={openThread}
+        environmentMachine={environmentMachineById.get(thread.environmentId) ?? "server"}
+        scratchMachineLabel={null}
+        project={projectByKey.get(projectKey) ?? null}
+        projectDisplayName={projectDisplayNameByKey.get(projectKey) ?? null}
+        providerEntryByInstanceId={
+          providerEntriesByEnvironment.get(thread.environmentId) ?? NO_PROVIDER_ENTRIES
+        }
+        timestampFormat={timestampFormat}
+        onThreadClick={openThreadFromRow}
+        onThreadActivate={openThread}
+        onStartRename={noop}
+        onRenameTitleChange={noop}
+        onCommitRename={noop}
+        onCancelRename={noop}
+        isRenaming={false}
+        renamingTitle=""
         onContextMenu={openThreadMenu}
+        onSettle={noop}
+        onActionSweepStart={noop}
+        onUnsettle={noop}
+        onSnooze={noop}
+        onUnsnooze={noop}
+        onUnpin={unpinInWorkstream}
+        onAcknowledgeWoke={noop}
       />
     );
   };
@@ -569,41 +731,74 @@ export default function WorkstreamSidebar() {
         className="min-h-full"
         fixedHeader={
           <SidebarGroup className="z-[1]">
-            <div className="flex h-8 items-center gap-1 px-2">
-              <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground">
-                <T>Workstreams</T>
-              </h2>
-              <Menu>
-                <MenuTrigger
-                  render={
-                    <SidebarHeaderIconButton
-                      label={gt("Sort workstreams")}
-                      tooltip={gt("Sort: {mode}", { mode: m(SORT_MODE_LABELS[sort]) })}
-                    />
-                  }
-                >
-                  <ArrowDownUpIcon />
-                </MenuTrigger>
-                <MenuPopup align="end" side="bottom">
-                  <MenuRadioGroup
-                    value={sort}
-                    onValueChange={(next) => setSort(next as WorkstreamSortMode)}
+            <div className="flex items-center gap-1">
+              <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-within:bg-sidebar-row-hover focus-within:text-sidebar-foreground focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring/70">
+                <SearchIcon className="size-4 shrink-0 text-(--sidebar-icon-color)" />
+                <SidebarInput
+                  ref={searchInputRef}
+                  nativeInput
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape" && query !== "") {
+                      event.preventDefault();
+                      setQuery("");
+                    }
+                  }}
+                  placeholder={gt("Search", { $context: "search field placeholder" })}
+                  aria-label={gt("Search workstreams")}
+                  className="min-w-0 flex-1"
+                />
+                {searching ? (
+                  <Button
+                    type="button"
+                    size="icon-micro"
+                    variant="ghost-muted"
+                    className="shrink-0"
+                    aria-label={gt("Clear workstream search")}
+                    onClick={() => {
+                      setQuery("");
+                      searchInputRef.current?.focus();
+                    }}
                   >
-                    {SORT_MODES.map((mode) => (
-                      <MenuRadioItem key={mode} value={mode} closeOnClick>
-                        {m(SORT_MODE_LABELS[mode])}
-                      </MenuRadioItem>
-                    ))}
-                  </MenuRadioGroup>
-                </MenuPopup>
-              </Menu>
-              <SidebarHeaderIconButton
-                label={gt("New workstream")}
-                disabled={editableEnvironmentIds.size === 0}
-                onClick={openNewWorkstream}
-              >
-                <PlusIcon />
-              </SidebarHeaderIconButton>
+                    <XIcon className="size-3" />
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center">
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <SidebarHeaderIconButton
+                        label={gt("Sort workstreams")}
+                        tooltip={gt("Sort: {mode}", { mode: m(SORT_MODE_LABELS[sort]) })}
+                      />
+                    }
+                  >
+                    <ArrowDownUpIcon />
+                  </MenuTrigger>
+                  <MenuPopup align="end" side="bottom">
+                    <MenuRadioGroup
+                      value={sort}
+                      onValueChange={(next) => setSort(next as WorkstreamSortMode)}
+                    >
+                      {SORT_MODES.map((mode) => (
+                        <MenuRadioItem key={mode} value={mode} closeOnClick>
+                          {m(SORT_MODE_LABELS[mode])}
+                        </MenuRadioItem>
+                      ))}
+                    </MenuRadioGroup>
+                  </MenuPopup>
+                </Menu>
+                <SidebarHeaderIconButton
+                  label={gt("New workstream")}
+                  disabled={editableEnvironmentIds.size === 0}
+                  onClick={openNewWorkstream}
+                >
+                  <FolderPlusIcon />
+                </SidebarHeaderIconButton>
+              </div>
             </div>
           </SidebarGroup>
         }
@@ -611,7 +806,7 @@ export default function WorkstreamSidebar() {
         <SidebarGroup>
           <DndContext
             sensors={sensors}
-            collisionDetection={collisionDetection}
+            collisionDetection={makeCollisionDetection(pinnedDragIds)}
             modifiers={[restrictToVerticalAxis]}
             onDragEnd={handleDragEnd}
           >
@@ -637,18 +832,19 @@ export default function WorkstreamSidebar() {
                       key={key}
                       entry={entry}
                       threadCount={entry.threads.length + missing}
-                      collapsed={collapsedKeys.keys.includes(key)}
+                      collapsed={isCollapsed(key)}
                       environmentLabel={
                         showEnvironment ? (labelByEnvironment.get(environmentId) ?? null) : null
                       }
                       canMutate={canMutate(environmentId)}
-                      reorderable={sort === "manual"}
+                      reorderable={sort === "manual" && !searching}
                       isRenaming={renamingKey === key}
                       onToggle={toggleWorkstream}
                       onNewThread={newThreadInWorkstream}
                       onContextMenu={openWorkstreamMenu}
                       onCommitRename={commitRename}
                       onCancelRename={() => setRenamingKey(null)}
+                      onAppearanceChange={changeAppearance}
                     >
                       <SortableContext
                         items={pinned.map((member) =>
@@ -669,7 +865,7 @@ export default function WorkstreamSidebar() {
                             onClick={() => {
                               if (memberPages.failed) memberPages.retry();
                             }}
-                            className="flex h-8 w-full items-center rounded-(--control-radius) pr-2 pl-8 text-left text-xs text-sidebar-muted-foreground hover:bg-sidebar-row-hover aria-disabled:cursor-default aria-disabled:hover:bg-transparent"
+                            className="flex h-8 w-full items-center rounded-(--control-radius) px-2.5 text-left text-xs text-sidebar-muted-foreground hover:bg-sidebar-row-hover aria-disabled:cursor-default aria-disabled:hover:bg-transparent"
                           >
                             {memberPages.failed
                               ? gt("Could not load older threads. Retry")
@@ -677,7 +873,7 @@ export default function WorkstreamSidebar() {
                           </button>
                         </li>
                       ) : entry.threads.length === 0 ? (
-                        <li className="list-none py-1.5 pr-2 pl-8 text-xs text-sidebar-muted-foreground">
+                        <li className="list-none px-2.5 py-1.5 text-xs text-sidebar-muted-foreground">
                           <T>No threads yet. Drag one here or start a new one.</T>
                         </li>
                       ) : null}
@@ -685,7 +881,12 @@ export default function WorkstreamSidebar() {
                   );
                 })}
               </SortableContext>
-              {entries.length === 0 ? (
+              {searching && entries.length === 0 && unsorted.length === 0 ? (
+                <li className="list-none px-2.5 py-3 text-sm text-sidebar-muted-foreground">
+                  <T>No workstream or thread matches.</T>
+                </li>
+              ) : null}
+              {entries.length === 0 && !searching ? (
                 <li className="list-none px-2.5 py-3 text-sm text-sidebar-muted-foreground">
                   {loading ? (
                     <T>Loading workstreams…</T>
@@ -728,20 +929,21 @@ export default function WorkstreamSidebar() {
                         onClick={() => {
                           if (memberPages.failed) memberPages.retry();
                         }}
-                        className="flex h-8 w-full items-center rounded-(--control-radius) pr-2 pl-8 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover aria-disabled:cursor-default aria-disabled:hover:bg-transparent"
+                        className="flex h-8 w-full items-center rounded-(--control-radius) px-2.5 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover aria-disabled:cursor-default aria-disabled:hover:bg-transparent"
                       >
                         {memberPages.failed
                           ? gt("Could not load older threads. Retry")
                           : gt("Loading")}
                       </button>
                     </li>
-                  ) : unsorted.length > unsortedLimit || memberPages.hasUnreadPages ? (
+                  ) : !searching &&
+                    (unsorted.length > unsortedLimit || memberPages.hasUnreadPages) ? (
                     <li className="list-none">
                       <button
                         type="button"
                         data-testid="workstream-unsorted-more"
                         onClick={showMoreUnsorted}
-                        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-(--control-radius) pr-2 pl-8 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-(--control-radius) px-2.5 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                       >
                         <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
                         {gt("{count, plural, one {Show {count} more} other {Show {count} more}}", {

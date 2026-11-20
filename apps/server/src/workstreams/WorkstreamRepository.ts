@@ -1,8 +1,11 @@
 import {
+  defaultWorkstreamAppearance,
   ModelSelection,
   type ProjectId,
   type ThreadId,
   type Workstream,
+  WorkstreamColor,
+  WorkstreamIcon,
   type WorkstreamId,
   type WorkstreamMembership,
   type WorkstreamMemoryEntry,
@@ -23,6 +26,8 @@ interface WorkstreamRow {
   readonly name: string;
   readonly order_key: string;
   readonly default_project_id: ProjectId | null;
+  readonly icon: string | null;
+  readonly color: string | null;
   readonly memory_enabled: number;
   readonly memory_instructions: string;
   readonly memory_budget_chars: number;
@@ -111,9 +116,17 @@ export type WorkstreamMemoryOperation =
       readonly ifRevision?: number | undefined;
     };
 
+const isWorkstreamIcon = Schema.is(WorkstreamIcon);
+const isWorkstreamColor = Schema.is(WorkstreamColor);
+
 const toWorkstream = (row: WorkstreamReadRow): WorkstreamRecord => ({
   id: row.workstream_id,
   name: row.name as Workstream["name"],
+  // Rows from before icons existed, or holding one since removed, fall back to the id's own.
+  icon: isWorkstreamIcon(row.icon) ? row.icon : defaultWorkstreamAppearance(row.workstream_id).icon,
+  color: isWorkstreamColor(row.color)
+    ? row.color
+    : defaultWorkstreamAppearance(row.workstream_id).color,
   orderKey: row.order_key,
   defaultProjectId: row.default_project_id,
   memory: {
@@ -218,6 +231,8 @@ const make = Effect.gen(function* () {
       name TEXT NOT NULL,
       order_key TEXT NOT NULL,
       default_project_id TEXT,
+      icon TEXT,
+      color TEXT,
       memory_enabled INTEGER NOT NULL,
       memory_instructions TEXT NOT NULL,
       memory_budget_chars INTEGER NOT NULL,
@@ -240,6 +255,13 @@ const make = Effect.gen(function* () {
     ) WITHOUT ROWID
   `;
   // Columns added after the first build: CREATE TABLE IF NOT EXISTS leaves an older table as it was.
+  const workstreamColumns = yield* sql<{ readonly name: string }>`
+    SELECT name FROM pragma_table_info('workstreams')
+  `;
+  if (!workstreamColumns.some((column) => column.name === "icon")) {
+    yield* sql`ALTER TABLE workstreams ADD COLUMN icon TEXT`;
+    yield* sql`ALTER TABLE workstreams ADD COLUMN color TEXT`;
+  }
   const threadColumns = yield* sql<{ readonly name: string }>`
     SELECT name FROM pragma_table_info('workstream_threads')
   `;
@@ -327,11 +349,12 @@ const make = Effect.gen(function* () {
     insertWorkstream: Effect.fn("WorkstreamRepository.insertWorkstream")(function* (workstream) {
       yield* sql`
         INSERT INTO workstreams (
-          workstream_id, name, order_key, default_project_id, memory_enabled,
+          workstream_id, name, order_key, default_project_id, icon, color, memory_enabled,
           memory_instructions, memory_budget_chars, created_at, updated_at
         ) VALUES (
           ${workstream.id}, ${workstream.name}, ${workstream.orderKey},
-          ${workstream.defaultProjectId}, ${workstream.memory.enabled ? 1 : 0},
+          ${workstream.defaultProjectId}, ${workstream.icon}, ${workstream.color},
+          ${workstream.memory.enabled ? 1 : 0},
           ${workstream.memory.instructions}, ${workstream.memory.budgetChars},
           ${workstream.createdAt}, ${workstream.updatedAt}
         )
@@ -343,6 +366,8 @@ const make = Effect.gen(function* () {
           name = ${workstream.name},
           order_key = ${workstream.orderKey},
           default_project_id = ${workstream.defaultProjectId},
+          icon = ${workstream.icon},
+          color = ${workstream.color},
           memory_enabled = ${workstream.memory.enabled ? 1 : 0},
           memory_instructions = ${workstream.memory.instructions},
           memory_budget_chars = ${workstream.memory.budgetChars},

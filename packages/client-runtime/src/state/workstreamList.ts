@@ -207,6 +207,8 @@ export function applyWorkstreamMutation(
             : {
                 ...workstream,
                 ...(mutation.name === undefined ? {} : { name: mutation.name }),
+                ...(mutation.icon === undefined ? {} : { icon: mutation.icon }),
+                ...(mutation.color === undefined ? {} : { color: mutation.color }),
                 ...(mutation.orderKey === undefined ? {} : { orderKey: mutation.orderKey }),
                 ...(mutation.defaultProjectId === undefined
                   ? {}

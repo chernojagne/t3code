@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  defaultWorkstreamAppearance,
   ProjectId,
   type WorkstreamId,
   WorkstreamMemoryEntryId,
@@ -53,7 +54,7 @@ const create = Effect.fn("test.create")(function* (name: string) {
   return result.workstreamId as WorkstreamId;
 });
 
-it.effect("keeps workstreams in creation order and stores a default project", () =>
+it.effect("keeps workstreams in creation order and stores a default project and icon", () =>
   Effect.gen(function* () {
     const service = yield* WorkstreamService.WorkstreamService;
     const first = yield* create("Checkout rewrite");
@@ -62,8 +63,16 @@ it.effect("keeps workstreams in creation order and stores a default project", ()
       type: "workstream.update",
       workstreamId: second,
       defaultProjectId: ProjectId.make("project:infra"),
+      icon: "bug",
+      color: "pink",
     });
     const { workstreams } = yield* current;
+    // An untouched workstream shows its id's own icon; a chosen one is stored.
+    assert.deepStrictEqual(
+      { icon: workstreams[0]!.icon, color: workstreams[0]!.color },
+      defaultWorkstreamAppearance(first),
+    );
+    assert.deepStrictEqual([workstreams[1]!.icon, workstreams[1]!.color], ["bug", "pink"]);
     assert.deepStrictEqual(
       workstreams.map((workstream) => [workstream.id, workstream.defaultProjectId]),
       [

@@ -47,9 +47,71 @@ export const WorkstreamMemorySettings = Schema.Struct({
 });
 export type WorkstreamMemorySettings = typeof WorkstreamMemorySettings.Type;
 
+export const WORKSTREAM_ICONS = [
+  "rocket",
+  "bug",
+  "flask",
+  "wrench",
+  "compass",
+  "star",
+  "shield",
+  "database",
+  "globe",
+  "terminal",
+  "zap",
+  "package",
+  "map",
+  "target",
+  "book",
+  "flag",
+  "lightbulb",
+  "puzzle",
+  "anchor",
+  "leaf",
+  "flame",
+  "key",
+  "telescope",
+  "server",
+] as const;
+export const WorkstreamIcon = Schema.Literals(WORKSTREAM_ICONS);
+export type WorkstreamIcon = typeof WorkstreamIcon.Type;
+
+export const WORKSTREAM_COLORS = [
+  "red",
+  "orange",
+  "amber",
+  "green",
+  "teal",
+  "blue",
+  "indigo",
+  "purple",
+  "pink",
+  "gray",
+] as const;
+export const WorkstreamColor = Schema.Literals(WORKSTREAM_COLORS);
+export type WorkstreamColor = typeof WorkstreamColor.Type;
+
+/** The icon and color a workstream shows until the user picks: stable per id, spread across ids. */
+export function defaultWorkstreamAppearance(id: string): {
+  readonly icon: WorkstreamIcon;
+  readonly color: WorkstreamColor;
+} {
+  let hash = 2166136261;
+  for (let index = 0; index < id.length; index += 1) {
+    hash = Math.imul(hash ^ id.charCodeAt(index), 16777619) >>> 0;
+  }
+  return {
+    icon: WORKSTREAM_ICONS[hash % WORKSTREAM_ICONS.length]!,
+    color: WORKSTREAM_COLORS[(hash >>> 8) % WORKSTREAM_COLORS.length]!,
+  };
+}
+
 export const Workstream = Schema.Struct({
   id: WorkstreamId,
   name: TrimmedNonEmptyString,
+  /** A visual marker shown before the name; it carries no meaning. */
+  icon: WorkstreamIcon,
+  color: WorkstreamColor,
   /** Fractional key for the manual order. */
   orderKey: Schema.String,
   /** Project a new session in this workstream starts in. Null falls back to the client default. */
@@ -102,6 +164,8 @@ export const WorkstreamMutation = Schema.Union([
     type: Schema.Literal("workstream.update"),
     workstreamId: WorkstreamId,
     name: Schema.optional(TrimmedNonEmptyString),
+    icon: Schema.optional(WorkstreamIcon),
+    color: Schema.optional(WorkstreamColor),
     defaultProjectId: Schema.optional(Schema.NullOr(ProjectId)),
     orderKey: Schema.optional(Schema.String),
     memoryEnabled: Schema.optional(Schema.Boolean),
