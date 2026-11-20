@@ -312,7 +312,7 @@ export function WorkstreamRow(props: {
           </span>
         )}
       </div>
-      {collapsed ? null : <ul className="flex flex-col">{props.children}</ul>}
+      {collapsed ? null : <ul className="flex flex-col ps-5">{props.children}</ul>}
     </li>
   );
 }
